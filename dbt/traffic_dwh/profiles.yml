@@ -1,0 +1,38 @@
+# dbt connection profiles for traffic_dwh.
+#
+# All credential values are read from environment variables.
+# This file is safe to commit because it contains no secrets.
+#
+# Usage
+# -----
+# From the dbt project directory:
+#
+#   dbt run --profiles-dir .
+#
+# Or set DBT_PROFILES_DIR=dbt/traffic_dwh in your shell / compose environment.
+#
+# Required environment variables for v1_local target:
+#   TRAFFIC_DB_HOST      (default: localhost)
+#   TRAFFIC_DB_PORT      (default: 5432)
+#   TRAFFIC_DB_NAME
+#   TRAFFIC_DB_USER
+#   TRAFFIC_DB_PASSWORD
+
+traffic_dwh:
+  target: v1_local
+
+  outputs:
+
+    # ── V1 — local PostgreSQL ─────────────────────────────────────────────────
+    v1_local:
+      type: postgres
+      host: "{{ env_var('TRAFFIC_DB_HOST', 'localhost') }}"
+      port: "{{ env_var('TRAFFIC_DB_PORT', '5432') | int }}"
+      dbname: "{{ env_var('TRAFFIC_DB_NAME') }}"
+      user: "{{ env_var('TRAFFIC_DB_USER') }}"
+      password: "{{ env_var('TRAFFIC_DB_PASSWORD') }}"
+      schema: staging
+      threads: 4
+      keepalives_idle: 0
+      connect_timeout: 10
+      search_path: "staging,intermediate,marts,analytics,raw"

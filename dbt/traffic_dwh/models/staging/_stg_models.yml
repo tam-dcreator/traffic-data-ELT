@@ -1,0 +1,90 @@
+version: 2
+
+models:
+  - name: stg_vehicle_trajectories
+    description: >
+      Cleaned and cast vehicle trajectory frames.
+      One row per (source_file, track_id, timestamp_s) observation.
+      Downstream models should build on this view rather than directly
+      querying raw.vehicle_trajectories.
+
+    columns:
+      - name: raw_id
+        description: Primary key from the raw table; carried through for traceability.
+        tests:
+          - unique
+          - not_null
+
+      - name: source_file
+        description: Originating CSV file basename.
+        tests:
+          - not_null
+
+      - name: track_id
+        description: Vehicle identifier within the source file.
+        tests:
+          - not_null
+
+      - name: vehicle_type
+        description: Lowercased vehicle class label.
+        tests:
+          - not_null
+          - accepted_values:
+              values:
+                - car
+                - motorcycle
+                - taxi
+                - bus
+                - medium vehicle
+                - heavy vehicle
+
+      - name: lat
+        description: Latitude (decimal degrees, WGS84, 6 d.p.).
+        tests:
+          - not_null
+
+      - name: lon
+        description: Longitude (decimal degrees, WGS84, 6 d.p.).
+        tests:
+          - not_null
+
+      - name: speed_ms
+        description: Instantaneous speed (m/s, 4 d.p.).
+        tests:
+          - not_null
+
+      - name: timestamp_s
+        description: Elapsed time from recording start (seconds).
+        tests:
+          - not_null
+
+      - name: ingested_at
+        description: UTC ingestion timestamp carried from raw.
+        tests:
+          - not_null
+
+  - name: stg_pipeline_runs
+    description: >
+      Cleaned view of audit.pipeline_runs with derived convenience columns.
+      Used for operational dashboards in Redash.
+
+    columns:
+      - name: run_id
+        description: UUID run identifier.
+        tests:
+          - unique
+          - not_null
+      - name: status
+        description: "Outcome: success | failed | skipped."
+        tests:
+          - not_null
+          - accepted_values:
+              values: [success, failed, skipped]
+      - name: rows_loaded
+        description: Rows successfully inserted (0 for skipped/failed).
+        tests:
+          - not_null
+      - name: is_success
+        description: Boolean flag — true when status = 'success'.
+        tests:
+          - not_null

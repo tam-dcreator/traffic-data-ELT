@@ -1,0 +1,124 @@
+version: 2
+
+sources:
+  - name: audit
+    description: >
+      Operational metadata written by the ingestion pipeline.
+      Used for monitoring load status, row counts, and data quality results.
+    schema: audit
+    loader: airflow
+
+    tables:
+      - name: pipeline_runs
+        description: >
+          One row per pipeline load attempt.  Written by RawLoader on every
+          run, whether successful, failed, or skipped.
+
+        columns:
+          - name: run_id
+            description: UUID assigned to each run attempt.
+            tests:
+              - unique
+              - not_null
+          - name: status
+            description: "Outcome: success | failed | skipped."
+            tests:
+              - not_null
+              - accepted_values:
+                  values: [success, failed, skipped]
+          - name: started_at
+            description: UTC timestamp when the load attempt began.
+            tests:
+              - not_null
+
+  - name: raw
+    description: >
+      Raw tables populated by the Airflow ingestion pipeline.
+      Data is loaded directly from pNEUMA CSV files with minimal
+      transformation — source values are preserved.
+    schema: raw
+    loader: airflow
+    loaded_at_field: ingested_at
+
+    tables:
+      - name: vehicle_trajectories
+        description: >
+          One row per trajectory frame per vehicle, as extracted from
+          pNEUMA CSV files.  Each CSV row (track) is unpivoted into
+          individual time-step records by the ingestion pipeline.
+
+        columns:
+          - name: id
+            description: Surrogate primary key (bigserial).
+            tests:
+              - unique
+              - not_null
+
+          - name: source_file
+            description: Basename of the originating CSV file.
+            tests:
+              - not_null
+
+          - name: track_id
+            description: Vehicle identifier within the source file.
+            tests:
+              - not_null
+
+          - name: vehicle_type
+            description: Vehicle class label (Car, Motorcycle, Taxi, Bus, …).
+            tests:
+              - not_null
+              - accepted_values:
+                  values:
+                    - Car
+                    - Motorcycle
+                    - Taxi
+                    - Bus
+                    - Medium Vehicle
+                    - Heavy Vehicle
+
+          - name: traveled_d_m
+            description: Total distance travelled by this vehicle (metres).
+            tests:
+              - not_null
+
+          - name: avg_speed_ms
+            description: Average speed of this vehicle over the recording (m/s).
+            tests:
+              - not_null
+
+          - name: lat
+            description: Latitude at this frame (decimal degrees, WGS84).
+            tests:
+              - not_null
+
+          - name: lon
+            description: Longitude at this frame (decimal degrees, WGS84).
+            tests:
+              - not_null
+
+          - name: speed_ms
+            description: Instantaneous speed at this frame (m/s).
+            tests:
+              - not_null
+
+          - name: lon_acc_ms2
+            description: Longitudinal acceleration at this frame (m/s²).
+            tests:
+              - not_null
+
+          - name: lat_acc_ms2
+            description: Lateral acceleration at this frame (m/s²).
+            tests:
+              - not_null
+
+          - name: timestamp_s
+            description: >
+              Elapsed time from recording start to this frame (seconds).
+            tests:
+              - not_null
+
+          - name: ingested_at
+            description: UTC timestamp when this row was written to the warehouse.
+            tests:
+              - not_null

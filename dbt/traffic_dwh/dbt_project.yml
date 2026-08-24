@@ -1,0 +1,42 @@
+name: traffic_dwh
+version: "0.1.0"
+config-version: 2
+
+# Profile to use — matched against profiles.yml target name.
+# For V1 local, the profile is "traffic_dwh" with target "v1_local".
+profile: traffic_dwh
+
+# Paths are relative to this file.
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - target
+  - dbt_packages
+
+# ── Model configuration by layer ─────────────────────────────────────────────
+models:
+  traffic_dwh:
+
+    # raw: not managed by dbt (source tables loaded by Airflow).
+    # Defined as sources in models/staging/_sources.yml.
+
+    staging:
+      +schema: staging
+      +materialized: view
+
+    intermediate:
+      +schema: intermediate
+      +materialized: view
+
+    marts:
+      +schema: marts
+      +materialized: table
+
+    analytics:
+      +schema: analytics
+      +materialized: table
