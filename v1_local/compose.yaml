@@ -34,6 +34,7 @@ x-airflow-common: &airflow-common
     - ../v1_local/airflow/dags:/opt/airflow/dags:ro
     - ../src/traffic_data_elt:/opt/traffic_data_elt_src/traffic_data_elt:ro
     - ./airflow/config/airflow.cfg:/opt/airflow/airflow.cfg:ro
+    - ../data/sample:/data/sample:ro
     - airflow_logs:/opt/airflow/logs
   networks:
     - traffic_v1
