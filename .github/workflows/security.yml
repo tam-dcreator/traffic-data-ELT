@@ -1,0 +1,19 @@
+name: Security
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Scan the repository for exposed secrets.
+      - name: GitGuardian scan
+        uses: GitGuardian/ggshield/actions/secret@v1.53.0
+        env:
+          GITGUARDIAN_API_KEY: ${{ secrets.GITGUARDIAN_API_KEY }}

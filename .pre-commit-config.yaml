@@ -1,0 +1,20 @@
+# Pre-commit hooks executed before Git creates a commit.
+# This configuration adds GitGuardian secret scanning at commit time.
+
+repos:
+  # GitGuardian ggshield repository.
+  - repo: https://github.com/GitGuardian/ggshield
+
+    # Pin the hook version for reproducible development environments.
+    rev: v1.53.0
+
+    hooks:
+      # Scan staged changes for secrets such as API keys,
+      # passwords, tokens, and private keys.
+      - id: ggshield
+
+        # Use the Python runtime available in the Dev Container.
+        language_version: python3
+
+        # Run only during the pre-commit stage.
+        stages: [pre-commit]
