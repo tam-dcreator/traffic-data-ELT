@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Local data
+data/sample/*
+!data/sample/.gitkeep
+
+# dbt generated artifacts
+dbt/traffic_dwh/target/
+dbt/traffic_dwh/logs/
+dbt/traffic_dwh/dbt_packages/
+
+# Airflow runtime artifacts
+v1_local/airflow/logs/
+v2_cloud/airflow/logs/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Credentials / keys
+.aws/
+*.pem
+*.key
+
+# Temporary files
+*.tmp
+*.log
