@@ -11,13 +11,10 @@ FROM apache/airflow:${AIRFLOW_VERSION}
 
 # Copy the shared Python package source from the repo root build context.
 USER root
-COPY --chown=airflow:root src/ /opt/traffic_data_elt_src/
+COPY --chown=airflow:root src/ ./src
+COPY --chown=airflow:root pyproject.toml ./pyproject.toml
 USER airflow
 
+USER airflow
 # Install the shared package.
-# Pin apache-airflow to the base image version to prevent pip from attempting
-# an unintended upgrade or downgrade.
-ARG AIRFLOW_VERSION=3.0.3
-RUN pip install --no-cache-dir \
-        "apache-airflow==${AIRFLOW_VERSION}" \
-        "/opt/traffic_data_elt_src"
+RUN pip install --no-cache-dir .
