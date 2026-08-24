@@ -29,11 +29,11 @@ compose.yaml.  No credentials appear in this file.
 
 from __future__ import annotations
 
+import datetime
 import os
 from pathlib import Path
 
 from airflow.decorators import dag, task
-from airflow.utils.dates import days_ago
 
 from traffic_data_elt.config import Settings
 from traffic_data_elt.extract import PneumaExtractor
@@ -51,7 +51,7 @@ ROW_LIMIT = int(os.environ.get("TRAFFIC_INGEST_ROW_LIMIT", "0"))
     dag_id=DAG_ID,
     description="Load pNEUMA CSV files from the sample directory into raw.vehicle_trajectories.",
     schedule=None,
-    start_date=days_ago(1),
+    start_date=datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
     catchup=False,
     max_active_runs=1,
     tags=["v1", "ingestion", "raw", "pneuma"],
@@ -87,11 +87,12 @@ def ingest_pneuma_raw() -> None:
             task_id="load_file",
         )
         extractor = PneumaExtractor(file_path, row_limit=ROW_LIMIT)
-        source_file = Path(file_path).name
 
-        log.info("starting load for %s", source_file)
-        result = loader.load(source_file, extractor.extract())
-        log.info("load result for %s: %s", source_file, result)
+        log.info("starting load for %s", file_path)
+        # Pass the full path so RawLoader can compute the file hash for
+        # idempotency.  source_file (basename) is derived inside the loader.
+        result = loader.load(file_path, extractor.extract())
+        log.info("load result for %s: %s", file_path, result)
         return result
 
     # ── Task wiring ────────────────────────────────────────────────────────────

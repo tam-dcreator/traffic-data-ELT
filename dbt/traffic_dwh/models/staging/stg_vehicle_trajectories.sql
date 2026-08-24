@@ -37,6 +37,7 @@ cleaned as (
     select
         id                                              as raw_id,
         source_file,
+        file_hash,
         track_id,
         trim(lower(vehicle_type))                       as vehicle_type,
         traveled_d_m,

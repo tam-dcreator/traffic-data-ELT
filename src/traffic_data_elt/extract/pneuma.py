@@ -3,24 +3,29 @@
 Parses the pNEUMA wide-format CSV into a stream of normalised trajectory
 frame records, one record per (track, time-step).
 
-pNEUMA CSV format
------------------
+Confirmed source format (verified against data/sample/pnemas.csv)
+-----------------------------------------------------------------
+Encoding  : UTF-8 with BOM (utf-8-sig)
+Line endings: CRLF
 Delimiter : semicolon  (;)
-Header row: present (first non-blank line)
+Header row: present — column names are:
+              track_id; type; traveled_d; avg_speed;
+              lat; lon; speed; lon_acc; lat_acc; time
+Trailing semicolon: each row ends with a semicolon, producing a spurious
+              empty field that is discarded during parsing.
 
-Columns::
+Data layout per row::
 
     track_id ; type ; traveled_d ; avg_speed ;
     lat_0 ; lon_0 ; speed_0 ; lon_acc_0 ; lat_acc_0 ; time_0 ;
     lat_1 ; lon_1 ; speed_1 ; lon_acc_1 ; lat_acc_1 ; time_1 ;
     ...
 
-The repeating 6-tuple (lat, lon, speed, lon_acc, lat_acc, time) can run to
-thousands of frames per track.  Each row in the output represents one frame
-of one track.
+The repeating 6-tuple (lat, lon, speed, lon_acc, lat_acc, time) represents
+one ~40 ms observation frame per vehicle track.
 
-Output columns
---------------
+Output columns (normalised names)
+----------------------------------
 source_file     : basename of the originating CSV file
 track_id        : integer vehicle identifier within the file
 vehicle_type    : string label (Car, Motorcycle, Taxi, Bus, …)
@@ -98,13 +103,16 @@ class PneumaExtractor:
 
         log.info("extracting from %s (row_limit=%d)", source_file, self._row_limit)
 
-        with self._path.open(newline="", encoding="utf-8") as fh:
+        # utf-8-sig automatically strips the UTF-8 BOM that pNEUMA files carry.
+        # newline="" is required by csv.reader to handle CRLF correctly across
+        # platforms without double-stripping.
+        with self._path.open(newline="", encoding="utf-8-sig") as fh:
             reader = csv.reader(fh, delimiter=";")
             header_skipped = False
 
             for raw_row in reader:
-                # Strip whitespace from every field (pNEUMA files often have
-                # trailing spaces after the final semicolon).
+                # Strip whitespace from every field and discard the trailing
+                # empty field produced by the row-ending semicolon.
                 row = [c.strip() for c in raw_row if c.strip() != ""]
 
                 # Skip the column-name header row.
@@ -122,8 +130,9 @@ class PneumaExtractor:
                 rows_seen += 1
 
                 try:
-                    yield from self._parse_track_row(row, source_file)
-                    records_yielded += len(row[_HEADER_COLS:]) // _FRAME_WIDTH
+                    frames = list(self._parse_track_row(row, source_file))
+                    yield from frames
+                    records_yielded += len(frames)
                 except (ValueError, IndexError) as exc:
                     rows_rejected += 1
                     log.warning(
@@ -155,25 +164,26 @@ class PneumaExtractor:
             )
 
         track_id = int(row[0])
-        vehicle_type = row[1]
-        traveled_d_m = float(row[2])
-        avg_speed_ms = float(row[3])
+        vehicle_type = row[1]        # source column name: "type"
+        traveled_d_m = float(row[2]) # source column name: "traveled_d"
+        avg_speed_ms = float(row[3]) # source column name: "avg_speed"
 
         frame_cols = row[_HEADER_COLS:]
-        # The number of frame columns must be a multiple of _FRAME_WIDTH.
-        # Truncate any trailing partial tuple rather than rejecting the row.
+        # Truncate any trailing partial tuple (incomplete final frame) rather
+        # than rejecting the whole row.
         n_frames = len(frame_cols) // _FRAME_WIDTH
 
         for i in range(n_frames):
             offset = i * _FRAME_WIDTH
-            lat = float(frame_cols[offset])
-            lon = float(frame_cols[offset + 1])
-            speed_ms = float(frame_cols[offset + 2])
-            lon_acc = float(frame_cols[offset + 3])
-            lat_acc = float(frame_cols[offset + 4])
+            lat        = float(frame_cols[offset])
+            lon        = float(frame_cols[offset + 1])
+            speed_ms   = float(frame_cols[offset + 2]) # source column: "speed"
+            lon_acc    = float(frame_cols[offset + 3])
+            lat_acc    = float(frame_cols[offset + 4])
             timestamp_s = float(frame_cols[offset + 5])
 
-            # Basic coordinate sanity check — Athens bounding box ± generous margin.
+            # Coordinate sanity check — Athens bounding box with a generous
+            # margin around the 1.3 km² pNEUMA study area.
             if not (37.9 <= lat <= 38.1 and 23.6 <= lon <= 23.9):
                 raise ValueError(
                     f"coordinate out of expected range: lat={lat}, lon={lon}"

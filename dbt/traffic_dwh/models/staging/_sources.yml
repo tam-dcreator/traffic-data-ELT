@@ -20,6 +20,8 @@ sources:
             tests:
               - unique
               - not_null
+          - name: file_hash
+            description: SHA-256 hex digest of the source file for this run.
           - name: status
             description: "Outcome: success | failed | skipped."
             tests:
@@ -56,6 +58,11 @@ sources:
 
           - name: source_file
             description: Basename of the originating CSV file.
+            tests:
+              - not_null
+
+          - name: file_hash
+            description: SHA-256 hex digest of the source file at ingestion time.
             tests:
               - not_null
 

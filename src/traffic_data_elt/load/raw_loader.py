@@ -2,11 +2,14 @@
 
 Design decisions
 ----------------
-- Uses ``psycopg`` (v3) with ``executemany`` and ``COPY`` semantics via
-  ``copy`` helpers for efficient bulk inserts.
-- Idempotent: a (source_file) uniqueness guard prevents re-loading a file
-  that was already successfully loaded.  The check is done at the start of
-  each load operation; a partially-loaded file is cleaned up and retried.
+- Uses ``psycopg`` (v3) with ``executemany`` for efficient bulk inserts.
+- Idempotent: the idempotency key is (source_file, file_hash).  A file that
+  has been successfully loaded with the same SHA-256 hash is skipped.  A file
+  whose content has changed (new hash) is treated as a new load — the old rows
+  are deleted and the new rows are inserted in the same transaction.
+- Partial-load safety: DELETE and INSERT share a single database transaction.
+  If the INSERT fails the DELETE is also rolled back, leaving the previously
+  loaded rows intact.
 - All connection credentials come from :class:`~traffic_data_elt.config.Settings`;
   they are never logged.
 - Audit metadata is written to ``audit.pipeline_runs`` on success or failure
@@ -15,13 +18,15 @@ Design decisions
 
 from __future__ import annotations
 
+import datetime
+import hashlib
 import time
 import uuid
 from dataclasses import asdict
+from pathlib import Path
 from typing import Iterator
 
 import psycopg
-import psycopg.rows
 
 from traffic_data_elt.config import Settings
 from traffic_data_elt.extract.pneuma import PneumaRecord
@@ -29,13 +34,13 @@ from traffic_data_elt.utils import get_logger
 
 log = get_logger(__name__)
 
-# DDL run once at startup to ensure destination tables exist.
 _DDL_RAW_TABLE = """
 CREATE TABLE IF NOT EXISTS raw.vehicle_trajectories (
     id                BIGSERIAL PRIMARY KEY,
-    source_file       TEXT        NOT NULL,
-    track_id          INTEGER     NOT NULL,
-    vehicle_type      TEXT        NOT NULL,
+    source_file       TEXT             NOT NULL,
+    file_hash         TEXT             NOT NULL,
+    track_id          INTEGER          NOT NULL,
+    vehicle_type      TEXT             NOT NULL,
     traveled_d_m      DOUBLE PRECISION NOT NULL,
     avg_speed_ms      DOUBLE PRECISION NOT NULL,
     lat               DOUBLE PRECISION NOT NULL,
@@ -44,7 +49,7 @@ CREATE TABLE IF NOT EXISTS raw.vehicle_trajectories (
     lon_acc_ms2       DOUBLE PRECISION NOT NULL,
     lat_acc_ms2       DOUBLE PRECISION NOT NULL,
     timestamp_s       DOUBLE PRECISION NOT NULL,
-    ingested_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    ingested_at       TIMESTAMPTZ      NOT NULL DEFAULT now()
 );
 """
 
@@ -59,6 +64,7 @@ CREATE TABLE IF NOT EXISTS audit.pipeline_runs (
     dag_id            TEXT,
     task_id           TEXT,
     source_file       TEXT,
+    file_hash         TEXT,
     status            TEXT        NOT NULL,
     rows_loaded       BIGINT,
     rows_rejected     BIGINT,
@@ -70,6 +76,15 @@ CREATE TABLE IF NOT EXISTS audit.pipeline_runs (
 """
 
 _BATCH_SIZE = 5_000
+
+
+def _sha256(path: Path) -> str:
+    """Return the hex SHA-256 digest of a file."""
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(65_536), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 class RawLoader:
@@ -114,25 +129,41 @@ class RawLoader:
                 cur.execute(_DDL_RAW_INDEX)
                 cur.execute(_DDL_AUDIT_TABLE)
             conn.commit()
-            log.info("schema ensured: raw.vehicle_trajectories, audit.pipeline_runs")
+        log.info("schema ensured: raw.vehicle_trajectories, audit.pipeline_runs")
 
     def load(
         self,
-        source_file: str,
+        file_path: str | Path,
         records: Iterator[PneumaRecord],
     ) -> dict[str, object]:
-        """Load *records* for *source_file* into the raw table.
+        """Load *records* for the file at *file_path* into the raw table.
 
-        The load is skipped if the source file has already been successfully
-        loaded (idempotency guard).  A partially-loaded file is cleaned up
-        and re-loaded.
+        Idempotency
+        -----------
+        The key is ``(source_file, file_hash)``.  If a successful run already
+        exists for this exact (name, content) pair the load is skipped.
+
+        If the file content has changed (same name, different hash) the old
+        rows are deleted and the new rows are inserted atomically — both
+        operations share a single transaction so a mid-load failure leaves the
+        previously loaded rows intact.
 
         Returns a summary dict with ``rows_loaded``, ``rows_rejected``, and
         ``status`` keys.
         """
+        path = Path(file_path)
+        source_file = path.name
+        file_hash = _sha256(path)
+
         run_id = str(uuid.uuid4())
-        started_at = time.time()
+        started_at = time.monotonic()
+        started_wall = datetime.datetime.now(tz=datetime.timezone.utc)
         wh = self._settings.warehouse
+
+        rows_loaded = 0
+        rows_rejected = 0
+        status = "success"
+        error_message = None
 
         with psycopg.connect(
             host=wh.host,
@@ -142,23 +173,20 @@ class RawLoader:
             password=wh.password,
         ) as conn:
             # ── Idempotency check ─────────────────────────────────────────────
-            if self._already_loaded(conn, source_file):
-                log.info("skipping %s — already loaded", source_file)
+            if self._already_loaded(conn, source_file, file_hash):
+                log.info("skipping %s (%s) — already loaded", source_file, file_hash[:12])
                 return {"status": "skipped", "rows_loaded": 0, "rows_rejected": 0}
 
-            # Remove any partial load from a previous failed attempt.
-            self._delete_partial(conn, source_file)
-
-            rows_loaded = 0
-            rows_rejected = 0
-            status = "success"
-            error_message = None
-
             try:
-                rows_loaded, rows_rejected = self._bulk_insert(
-                    conn, source_file, records
-                )
-                conn.commit()
+                # DELETE old rows for this filename (if any) and INSERT new rows
+                # in a single transaction.  Rolling back on failure restores any
+                # previously loaded rows for this file.
+                with conn.transaction():
+                    self._delete_by_source(conn, source_file)
+                    rows_loaded, rows_rejected = self._bulk_insert(
+                        conn, source_file, file_hash, records
+                    )
+
                 log.info(
                     "loaded %s: %d rows inserted, %d rejected",
                     source_file,
@@ -166,25 +194,28 @@ class RawLoader:
                     rows_rejected,
                 )
             except Exception as exc:
-                conn.rollback()
                 status = "failed"
                 error_message = str(exc)
                 log.error("load failed for %s: %s", source_file, exc)
                 raise
             finally:
-                finished_at = time.time()
+                finished_wall = datetime.datetime.now(tz=datetime.timezone.utc)
+                duration = time.monotonic() - started_at
+                # Audit write uses autocommit=True so it succeeds even after a
+                # rolled-back transaction.
                 self._write_audit(
                     conn,
                     run_id=run_id,
                     source_file=source_file,
+                    file_hash=file_hash,
                     status=status,
                     rows_loaded=rows_loaded,
                     rows_rejected=rows_rejected,
                     error_message=error_message,
-                    started_at=started_at,
-                    finished_at=finished_at,
+                    started_at=started_wall,
+                    finished_at=finished_wall,
+                    duration_s=round(duration, 3),
                 )
-                conn.commit()
 
         return {
             "status": status,
@@ -197,41 +228,51 @@ class RawLoader:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _already_loaded(conn: psycopg.Connection, source_file: str) -> bool:
+    def _already_loaded(
+        conn: psycopg.Connection, source_file: str, file_hash: str
+    ) -> bool:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT 1 FROM audit.pipeline_runs
-                WHERE source_file = %s AND status = 'success'
+                WHERE source_file = %s
+                  AND file_hash   = %s
+                  AND status      = 'success'
                 LIMIT 1
                 """,
-                (source_file,),
+                (source_file, file_hash),
             )
             return cur.fetchone() is not None
 
     @staticmethod
-    def _delete_partial(conn: psycopg.Connection, source_file: str) -> None:
+    def _delete_by_source(conn: psycopg.Connection, source_file: str) -> None:
+        """Delete all rows for *source_file*.  Must be called inside a transaction."""
         with conn.cursor() as cur:
             cur.execute(
                 "DELETE FROM raw.vehicle_trajectories WHERE source_file = %s",
                 (source_file,),
             )
-        conn.commit()
 
     @staticmethod
     def _bulk_insert(
         conn: psycopg.Connection,
         source_file: str,
+        file_hash: str,
         records: Iterator[PneumaRecord],
     ) -> tuple[int, int]:
-        """Insert records in batches; return (rows_loaded, rows_rejected)."""
+        """Insert records in batches.  Must be called inside a transaction.
+
+        Returns (rows_loaded, rows_rejected).  rows_rejected is currently
+        always 0 because bad records are rejected upstream by PneumaExtractor;
+        the counter is retained for future per-row validation use.
+        """
         insert_sql = """
             INSERT INTO raw.vehicle_trajectories (
-                source_file, track_id, vehicle_type,
+                source_file, file_hash, track_id, vehicle_type,
                 traveled_d_m, avg_speed_ms,
                 lat, lon, speed_ms, lon_acc_ms2, lat_acc_ms2, timestamp_s
             ) VALUES (
-                %(source_file)s, %(track_id)s, %(vehicle_type)s,
+                %(source_file)s, %(file_hash)s, %(track_id)s, %(vehicle_type)s,
                 %(traveled_d_m)s, %(avg_speed_ms)s,
                 %(lat)s, %(lon)s, %(speed_ms)s,
                 %(lon_acc_ms2)s, %(lat_acc_ms2)s, %(timestamp_s)s
@@ -249,7 +290,9 @@ class RawLoader:
 
         with conn.cursor() as cur:
             for record in records:
-                batch.append(asdict(record))
+                row = asdict(record)
+                row["file_hash"] = file_hash
+                batch.append(row)
                 if len(batch) >= _BATCH_SIZE:
                     flush(cur)
             if batch:
@@ -263,39 +306,47 @@ class RawLoader:
         *,
         run_id: str,
         source_file: str,
+        file_hash: str,
         status: str,
         rows_loaded: int,
         rows_rejected: int,
         error_message: str | None,
-        started_at: float,
-        finished_at: float,
+        started_at: datetime.datetime,
+        finished_at: datetime.datetime,
+        duration_s: float,
     ) -> None:
-        import datetime
-
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO audit.pipeline_runs (
-                    run_id, dag_id, task_id, source_file,
-                    status, rows_loaded, rows_rejected, error_message,
-                    started_at, finished_at, duration_s
-                ) VALUES (
-                    %s, %s, %s, %s,
-                    %s, %s, %s, %s,
-                    %s, %s, %s
+        # Use autocommit for the audit write so it is committed regardless of
+        # whether the data load transaction was rolled back.
+        old_autocommit = conn.autocommit
+        conn.autocommit = True
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO audit.pipeline_runs (
+                        run_id, dag_id, task_id, source_file, file_hash,
+                        status, rows_loaded, rows_rejected, error_message,
+                        started_at, finished_at, duration_s
+                    ) VALUES (
+                        %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s,
+                        %s, %s, %s
+                    )
+                    """,
+                    (
+                        run_id,
+                        self._dag_id,
+                        self._task_id,
+                        source_file,
+                        file_hash,
+                        status,
+                        rows_loaded,
+                        rows_rejected,
+                        error_message,
+                        started_at,
+                        finished_at,
+                        duration_s,
+                    ),
                 )
-                """,
-                (
-                    run_id,
-                    self._dag_id,
-                    self._task_id,
-                    source_file,
-                    status,
-                    rows_loaded,
-                    rows_rejected,
-                    error_message,
-                    datetime.datetime.fromtimestamp(started_at, tz=datetime.timezone.utc),
-                    datetime.datetime.fromtimestamp(finished_at, tz=datetime.timezone.utc),
-                    round(finished_at - started_at, 3),
-                ),
-            )
+        finally:
+            conn.autocommit = old_autocommit
