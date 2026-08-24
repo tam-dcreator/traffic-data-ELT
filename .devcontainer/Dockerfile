@@ -4,4 +4,4 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list \
     /usr/share/keyrings/yarn-archive-keyring.gpg
 
 # Repository-level secret scanning.
-RUN pip install --no-cache-dir ggshield==1.53.0
+RUN pip install --no-cache-dir ggshield==1.53.0 pre-commit==4.3.0
