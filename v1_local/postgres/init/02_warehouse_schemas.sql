@@ -1,13 +1,14 @@
 -- 02_warehouse_schemas.sql
--- Creates the warehouse schemas inside traffic_dwh and grants the application
--- user access to each one.
+-- Creates the warehouse schemas inside traffic_dwh and transfers ownership
+-- to traffic_user so the application user can manage objects without
+-- requiring ongoing superuser grants.
 --
--- Must be connected to traffic_dwh when executed.
--- The postgres container runs each *.sql file in the traffic_dwh database
--- context only if we use the helper script below; otherwise we use \connect.
--- We use explicit \connect so this file is self-contained.
+-- Execution context: connected to traffic_dwh as the superuser.
+-- The postgres container connects each *.sql init file to the default
+-- database unless a \connect directive overrides it.
 --
--- Idempotent: CREATE SCHEMA IF NOT EXISTS is safe to re-run.
+-- Idempotent: CREATE SCHEMA IF NOT EXISTS and ALTER SCHEMA OWNER are both
+-- safe to re-run against an already-initialised database.
 
 \connect traffic_dwh
 
@@ -19,27 +20,18 @@ CREATE SCHEMA IF NOT EXISTS marts;
 CREATE SCHEMA IF NOT EXISTS analytics;
 CREATE SCHEMA IF NOT EXISTS audit;
 
--- ── Grant usage and create privileges to the warehouse user ───────────────────
--- These grants cover objects created in future migrations as well as
--- objects that exist now.
+-- ── Transfer ownership to the application user ────────────────────────────────
+-- Owning the schema grants the application user full DDL rights within it
+-- (CREATE TABLE, ALTER TABLE, CREATE INDEX, etc.) without requiring the
+-- superuser to issue further grants.  This is correct for a single-tenant
+-- local warehouse where traffic_user is the sole application actor.
 DO $$
 DECLARE
-    schema_name text;
+    s text;
 BEGIN
-    FOREACH schema_name IN ARRAY ARRAY['raw','staging','intermediate','marts','analytics','audit']
+    FOREACH s IN ARRAY ARRAY['raw','staging','intermediate','marts','analytics','audit']
     LOOP
-        EXECUTE format('GRANT USAGE ON SCHEMA %I TO traffic_user', schema_name);
-        EXECUTE format('GRANT CREATE ON SCHEMA %I TO traffic_user', schema_name);
-        -- Default privileges: any table/sequence created by postgres superuser
-        -- will also be accessible to traffic_user.
-        EXECUTE format(
-            'ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT ALL ON TABLES TO traffic_user',
-            schema_name
-        );
-        EXECUTE format(
-            'ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT ALL ON SEQUENCES TO traffic_user',
-            schema_name
-        );
+        EXECUTE format('ALTER SCHEMA %I OWNER TO traffic_user', s);
     END LOOP;
 END;
 $$;
