@@ -39,6 +39,13 @@ psql_su postgres <<-EOSQL
     GRANT ALL PRIVILEGES ON DATABASE "${TRAFFIC_DB_NAME}" TO "${TRAFFIC_DB_USER}";
 EOSQL
 
+psql_su "$TRAFFIC_DB_NAME" <<-EOSQL
+    ALTER DATABASE "${TRAFFIC_DB_NAME}" OWNER TO "${TRAFFIC_DB_USER}";
+    ALTER SCHEMA public OWNER TO "${TRAFFIC_DB_USER}";
+    GRANT ALL ON SCHEMA public TO "${TRAFFIC_DB_USER}";
+EOSQL
+echo "[init] Created database ${TRAFFIC_DB_NAME} with user ${TRAFFIC_DB_USER}."
+
 # ── airflow_meta ──────────────────────────────────────────────────────────────
 psql_su postgres <<-EOSQL
     SELECT 'CREATE DATABASE "${AIRFLOW_DB_NAME}"'
@@ -57,6 +64,13 @@ psql_su postgres <<-EOSQL
     GRANT ALL PRIVILEGES ON DATABASE "${AIRFLOW_DB_NAME}" TO "${AIRFLOW_DB_USER}";
 EOSQL
 
+psql_su "$AIRFLOW_DB_NAME" <<-EOSQL
+    ALTER DATABASE "${AIRFLOW_DB_NAME}" OWNER TO "${AIRFLOW_DB_USER}";
+    ALTER SCHEMA public OWNER TO "${AIRFLOW_DB_USER}";
+    GRANT ALL ON SCHEMA public TO "${AIRFLOW_DB_USER}";
+EOSQL
+echo "[init] Created database ${AIRFLOW_DB_NAME} with user ${AIRFLOW_DB_USER}."
+
 # ── redash_meta ───────────────────────────────────────────────────────────────
 psql_su postgres <<-EOSQL
     SELECT 'CREATE DATABASE "${REDASH_DB_NAME}"'
@@ -73,6 +87,12 @@ psql_su postgres <<-EOSQL
     \$\$;
 
     GRANT ALL PRIVILEGES ON DATABASE "${REDASH_DB_NAME}" TO "${REDASH_DB_USER}";
+EOSQL
+
+psql_su "$REDASH_DB_NAME" <<-EOSQL
+    ALTER DATABASE "${REDASH_DB_NAME}" OWNER TO "${REDASH_DB_USER}";
+    ALTER SCHEMA public OWNER TO "${REDASH_DB_USER}";
+    GRANT ALL ON SCHEMA public TO "${REDASH_DB_USER}";
 EOSQL
 
 echo "[init] Databases and users created."
