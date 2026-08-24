@@ -30,10 +30,13 @@ x-airflow-common: &airflow-common
     AIRFLOW__LOGGING__LOGGING_LEVEL: "INFO"
     # Prevent unbounded log growth inside the container
     AIRFLOW__LOGGING__LOG_RETENTION_DAYS: "30"
+    # SimpleAuthManager: declare the admin user (password written by airflow-init)
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "${AIRFLOW_ADMIN_USERNAME}:admin"
   volumes:
     - ../v1_local/airflow/dags:/opt/airflow/dags:ro
     - ../src/traffic_data_elt:/opt/traffic_data_elt_src/traffic_data_elt:ro
     - ./airflow/config/airflow.cfg:/opt/airflow/airflow.cfg:ro
+    - ./airflow/scripts/init.sh:/opt/airflow/scripts/init.sh:ro
     - ../data/sample:/data/sample:ro
     - airflow_logs:/opt/airflow/logs
   networks:
@@ -105,23 +108,17 @@ services:
         max-file: "3"
 
   # ── Airflow init (run-once) ─────────────────────────────────────────────────
-  # Runs DB migrations and creates the admin user, then exits.
-  # Not listed in the Fixed Compose Contract runtime services; it is a
-  # bootstrap helper, not a long-running service.
+  # Runs DB migrations and seeds the SimpleAuthManager password file so the
+  # admin user can log in with the password from .env on first start.
+  # Not listed in the Fixed Compose Contract runtime services.
   # Run explicitly: docker compose up airflow-init
   airflow-init:
     <<: *airflow-common
-    command: >
-      bash -c "
-        airflow db migrate &&
-        airflow users create
-          --username '${AIRFLOW_ADMIN_USERNAME}'
-          --password '${AIRFLOW_ADMIN_PASSWORD}'
-          --firstname Admin
-          --lastname User
-          --role Admin
-          --email admin@example.com
-      "
+    environment:
+      <<: *airflow-common-env
+      # Expose the admin password so init.sh can write the password file.
+      _AIRFLOW_ADMIN_PASSWORD: "${AIRFLOW_ADMIN_PASSWORD}"
+    command: bash /opt/airflow/scripts/init.sh
     restart: "no"
 
   # ── Airflow API server ──────────────────────────────────────────────────────
