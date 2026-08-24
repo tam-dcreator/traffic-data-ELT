@@ -1,0 +1,263 @@
+# V1 local runtime stack — Traffic Data ELT
+# Orchestrates: PostgreSQL, Airflow (LocalExecutor), Redash, Redis
+#
+# Usage:
+#   cd v1_local
+#   cp .env.example .env   # fill in real values
+#   docker compose up airflow-init   # run once to migrate and create admin
+#   docker compose up -d
+#
+# Ports exposed to the host:
+#   5432  — PostgreSQL
+#   8080  — Airflow API server / UI
+#   5000  — Redash
+# Redis remains internal (no host port binding).
+
+x-airflow-common: &airflow-common
+  build:
+    context: ..
+    dockerfile: v1_local/airflow/Dockerfile
+    args:
+      AIRFLOW_VERSION: "3.0.3"
+  image: traffic-airflow:3.0.3
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres:5432/${AIRFLOW_DB_NAME}"
+    AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: "60"
+    AIRFLOW__LOGGING__LOGGING_LEVEL: "INFO"
+    # Prevent unbounded log growth inside the container
+    AIRFLOW__LOGGING__LOG_RETENTION_DAYS: "30"
+  volumes:
+    - ../v1_local/airflow/dags:/opt/airflow/dags:ro
+    - ../src/traffic_data_elt:/opt/traffic_data_elt_src/traffic_data_elt:ro
+    - ./airflow/config/airflow.cfg:/opt/airflow/airflow.cfg:ro
+    - airflow_logs:/opt/airflow/logs
+  networks:
+    - traffic_v1
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+x-redash-common: &redash-common
+  image: redash/redash:10.1.0.b50633
+  environment: &redash-common-env
+    REDASH_DATABASE_URL: "postgresql://${REDASH_DB_USER}:${REDASH_DB_PASSWORD}@postgres:5432/${REDASH_DB_NAME}"
+    REDASH_REDIS_URL: "redis://redis:6379/0"
+    REDASH_SECRET_KEY: "${REDASH_SECRET_KEY}"
+    REDASH_COOKIE_SECRET: "${REDASH_COOKIE_SECRET}"
+    REDASH_LOG_LEVEL: "INFO"
+    REDASH_WEB_WORKERS: "1"
+  networks:
+    - traffic_v1
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  # Single server hosting traffic_dwh, airflow_meta, and redash_meta.
+  # Databases, users, and warehouse schemas are created by init scripts
+  # under v1_local/postgres/init/ (Step 2).
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      # Extra databases are created via init scripts, not via this variable.
+      # Setting POSTGRES_DB to the superuser's default maintenance database.
+      POSTGRES_DB: "postgres"
+      # Pass application credentials into the container so init scripts can
+      # reference them as environment variables.
+      TRAFFIC_DB_NAME: "${TRAFFIC_DB_NAME}"
+      TRAFFIC_DB_USER: "${TRAFFIC_DB_USER}"
+      TRAFFIC_DB_PASSWORD: "${TRAFFIC_DB_PASSWORD}"
+      AIRFLOW_DB_NAME: "${AIRFLOW_DB_NAME}"
+      AIRFLOW_DB_USER: "${AIRFLOW_DB_USER}"
+      AIRFLOW_DB_PASSWORD: "${AIRFLOW_DB_PASSWORD}"
+      REDASH_DB_NAME: "${REDASH_DB_NAME}"
+      REDASH_DB_USER: "${REDASH_DB_USER}"
+      REDASH_DB_PASSWORD: "${REDASH_DB_PASSWORD}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - traffic_v1
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    # Bound logging to avoid filling disk on long-running local stacks.
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Airflow init (run-once) ─────────────────────────────────────────────────
+  # Runs DB migrations and creates the admin user, then exits.
+  # Not listed in the Fixed Compose Contract runtime services; it is a
+  # bootstrap helper, not a long-running service.
+  # Run explicitly: docker compose up airflow-init
+  airflow-init:
+    <<: *airflow-common
+    command: >
+      bash -c "
+        airflow db migrate &&
+        airflow users create
+          --username '${AIRFLOW_ADMIN_USERNAME}'
+          --password '${AIRFLOW_ADMIN_PASSWORD}'
+          --firstname Admin
+          --lastname User
+          --role Admin
+          --email admin@example.com
+      "
+    restart: "no"
+
+  # ── Airflow API server ──────────────────────────────────────────────────────
+  airflow-api-server:
+    <<: *airflow-common
+    command: airflow api-server
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Airflow scheduler ───────────────────────────────────────────────────────
+  airflow-scheduler:
+    <<: *airflow-common
+    command: airflow scheduler
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Airflow DAG processor ───────────────────────────────────────────────────
+  # Airflow 3 separates DAG file parsing into a dedicated process,
+  # reducing scheduler load and improving isolation.
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: airflow dag-processor
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Redash DB init (run-once) ───────────────────────────────────────────────
+  # Creates the Redash schema in redash_meta on first start, then exits.
+  # Run explicitly before starting redash-server:
+  #   docker compose up redash-create-db
+  redash-create-db:
+    <<: *redash-common
+    command: create_db
+    restart: "no"
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  # Required by Redash for its Celery task queue.
+  # No host port exposed — internal only.
+  redis:
+    image: redis:7.2-alpine
+    command: redis-server --save "" --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - traffic_v1
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # ── Redash server ───────────────────────────────────────────────────────────
+  redash-server:
+    <<: *redash-common
+    command: server
+    ports:
+      - "5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://localhost:5000/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - redash_data:/app/redash
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Redash worker ───────────────────────────────────────────────────────────
+  # Celery worker that executes query jobs enqueued by redash-server.
+  redash-worker:
+    <<: *redash-common
+    command: worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  traffic_v1:
+    driver: bridge
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+  airflow_logs:
+  redash_data:
+  redis_data:
