@@ -14,6 +14,8 @@
 # Redis remains internal (no host port binding).
 
 x-airflow-common: &airflow-common
+  env_file:
+    - .env
   build:
     context: ..
     dockerfile: v1_local/airflow/Dockerfile
@@ -133,7 +135,7 @@ services:
       airflow-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      test: ["CMD-SHELL", "curl --fail http://localhost:8080/api/v2/monitor/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
