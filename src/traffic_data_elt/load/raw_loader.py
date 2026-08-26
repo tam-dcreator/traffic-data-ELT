@@ -291,6 +291,7 @@ class RawLoader:
         with conn.cursor() as cur:
             for record in records:
                 row = asdict(record)
+                row["source_file"] = source_file
                 row["file_hash"] = file_hash
                 batch.append(row)
                 if len(batch) >= _BATCH_SIZE:

@@ -18,7 +18,7 @@ def _require(name: str) -> str:
     if not value:
         raise EnvironmentError(
             f"Required environment variable '{name}' is not set. "
-            "Copy v1_local/.env.example to v1_local/.env and fill in real values."
+            "Copy .env.example to .env and fill in real values."
         )
     return value
 

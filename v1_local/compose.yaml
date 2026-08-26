@@ -25,6 +25,7 @@ x-airflow-common: &airflow-common
   user: "${AIRFLOW_UID:-50000}:0"
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-api-server:8080/execution/"
     AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres:5432/${AIRFLOW_DB_NAME}"
