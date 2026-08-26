@@ -6,6 +6,11 @@
   "features": {
     "ghcr.io/devcontainers/features/docker-in-docker:2": {}
   },
+  "forwardPorts": [
+    8080,
+    5432,
+    5000
+  ],
   "customizations": {
     "vscode": {
       "extensions": [
