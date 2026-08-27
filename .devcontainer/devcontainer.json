@@ -19,5 +19,8 @@
       ]
     }
   },
+  "containerEnv": {
+    "DBT_PROFILES_DIR": "/workspaces/traffic_data_ELT/dbt/traffic_dwh"
+  },
   "remoteUser": "vscode"
 }
