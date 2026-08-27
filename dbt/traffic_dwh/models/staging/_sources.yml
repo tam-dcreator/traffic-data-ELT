@@ -27,7 +27,8 @@ sources:
             tests:
               - not_null
               - accepted_values:
-                  values: [success, failed, skipped]
+                  arguments:
+                    values: [success, failed, skipped]
           - name: started_at
             description: UTC timestamp when the load attempt began.
             tests:
@@ -76,13 +77,14 @@ sources:
             tests:
               - not_null
               - accepted_values:
-                  values:
-                    - Car
-                    - Motorcycle
-                    - Taxi
-                    - Bus
-                    - Medium Vehicle
-                    - Heavy Vehicle
+                  arguments:
+                    values:
+                      - Car
+                      - Motorcycle
+                      - Taxi
+                      - Bus
+                      - Medium Vehicle
+                      - Heavy Vehicle
 
           - name: traveled_d_m
             description: Total distance travelled by this vehicle (metres).
