@@ -27,6 +27,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-api-server:8080/execution/"
     AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
+    AIRFLOW__API_AUTH__JWT_SECRET: "${AIRFLOW_JWT_SECRET}"
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: "/opt/airflow/auth/passwords.json"
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres:5432/${AIRFLOW_DB_NAME}"
@@ -36,6 +37,8 @@ x-airflow-common: &airflow-common
     AIRFLOW__LOGGING__LOG_RETENTION_DAYS: "30"
     # SimpleAuthManager: declare the admin user (password written by airflow-init)
     AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "${AIRFLOW_ADMIN_USERNAME}:admin"
+    # Add python path so edits in the src directory are picked up by the python interpreter
+    PYTHONPATH: "/opt/traffic_data_elt_src"
   volumes:
     - ../v1_local/airflow/dags:/opt/airflow/dags:ro
     - ../src/traffic_data_elt:/opt/traffic_data_elt_src/traffic_data_elt:ro
