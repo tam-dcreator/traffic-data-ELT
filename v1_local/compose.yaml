@@ -28,6 +28,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-api-server:8080/execution/"
     AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: "/opt/airflow/auth/passwords.json"
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres:5432/${AIRFLOW_DB_NAME}"
     AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: "60"
     AIRFLOW__LOGGING__LOGGING_LEVEL: "INFO"
@@ -42,6 +43,7 @@ x-airflow-common: &airflow-common
     - ./airflow/scripts/init.sh:/opt/airflow/scripts/init.sh:ro
     - ../data/sample:/data/sample:ro
     - airflow_logs:/opt/airflow/logs
+    - airflow_auth:/opt/airflow/auth
   networks:
     - traffic_v1
   depends_on:
@@ -117,6 +119,7 @@ services:
   # Run explicitly: docker compose up airflow-init
   airflow-init:
     <<: *airflow-common
+    user: "0:0"
     environment:
       <<: *airflow-common-env
       # Expose the admin password so init.sh can write the password file.
@@ -262,3 +265,4 @@ volumes:
   airflow_logs:
   redash_data:
   redis_data:
+  airflow_auth:
