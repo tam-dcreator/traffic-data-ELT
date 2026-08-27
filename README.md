@@ -236,6 +236,8 @@ The repository uses GitGuardian at multiple layers.
 
 `ggshield` is installed in the Dev Container and is used for repository-level secret scanning.
 
+Run ```ggshield auth login ``` in your terminal to authenticate
+
 ### Pre-commit
 
 The repository contains:
