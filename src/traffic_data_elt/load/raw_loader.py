@@ -171,6 +171,7 @@ class RawLoader:
             dbname=wh.database,
             user=wh.user,
             password=wh.password,
+            autocommit=True,
         ) as conn:
             # ── Idempotency check ─────────────────────────────────────────────
             if self._already_loaded(conn, source_file, file_hash):
@@ -349,5 +350,7 @@ class RawLoader:
                         duration_s,
                     ),
                 )
-        finally:
-            conn.autocommit = old_autocommit
+        except psycopg.Error as exc:
+            log.error("failed to write audit record for %s: %s", source_file, exc)
+            raise
+        
