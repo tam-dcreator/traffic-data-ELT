@@ -39,12 +39,15 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "${AIRFLOW_ADMIN_USERNAME}:admin"
     # Add python path so edits in the src directory are picked up by the python interpreter
     PYTHONPATH: "/opt/traffic_data_elt_src"
+    # dbt looks for profiles.yml in this directory.
+    DBT_PROFILES_DIR: "/opt/airflow/dbt/traffic_dwh"
   volumes:
     - ../v1_local/airflow/dags:/opt/airflow/dags:ro
     - ../src/traffic_data_elt:/opt/traffic_data_elt_src/traffic_data_elt:ro
     - ./airflow/config/airflow.cfg:/opt/airflow/airflow.cfg:ro
     - ./airflow/scripts/init.sh:/opt/airflow/scripts/init.sh:ro
     - ../data/sample:/data/sample:ro
+    - ../dbt/traffic_dwh:/opt/airflow/dbt/traffic_dwh:ro
     - airflow_logs:/opt/airflow/logs
     - airflow_auth:/opt/airflow/auth
   networks:
