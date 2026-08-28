@@ -1,16 +1,22 @@
 {
   "name": "traffic_data_ELT",
+
   "build": {
     "dockerfile": "Dockerfile"
   },
+
   "features": {
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/aws-cli:1": {},
+    "ghcr.io/devcontainers/features/terraform:1": {}
   },
+
   "runArgs": [
     "-p", "8080:8080",
     "-p", "5000:5000",
     "-p", "5432:5432"
   ],
+
   "customizations": {
     "vscode": {
       "extensions": [
@@ -19,8 +25,10 @@
       ]
     }
   },
+
   "containerEnv": {
     "DBT_PROFILES_DIR": "/workspaces/traffic_data_ELT/dbt/traffic_dwh"
   },
+  
   "remoteUser": "vscode"
 }
