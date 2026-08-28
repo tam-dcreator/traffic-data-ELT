@@ -16,5 +16,7 @@ COPY --chown=airflow:root pyproject.toml ./pyproject.toml
 USER airflow
 
 USER airflow
-# Install the shared package.
-RUN pip install --no-cache-dir .
+# Install the shared package and dbt for orchestrated transformations.
+RUN pip install --no-cache-dir . \
+    "dbt-core>=1.8,<2" \
+    "dbt-postgres>=1.8,<2"
