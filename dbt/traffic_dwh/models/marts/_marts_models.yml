@@ -1,0 +1,146 @@
+version: 2
+
+models:
+  - name: fct_vehicle_trajectories
+    description: >
+      Fact table: one row per vehicle trajectory (source_file, track_id).
+      Reporting-ready model for trajectory analysis and dashboard consumption.
+      Built from the intermediate trajectory summary.
+
+    columns:
+      - name: source_file
+        description: Originating CSV file basename.
+        tests:
+          - not_null
+
+      - name: track_id
+        description: Vehicle identifier within the source file.
+        tests:
+          - not_null
+
+      - name: vehicle_type
+        description: Lowercased vehicle class label.
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values:
+                  - car
+                  - motorcycle
+                  - taxi
+                  - bus
+                  - medium vehicle
+                  - heavy vehicle
+
+      - name: frame_count
+        description: Number of frame observations for this trajectory.
+        tests:
+          - not_null
+
+      - name: start_time_s
+        description: Earliest frame timestamp (seconds from recording start).
+        tests:
+          - not_null
+
+      - name: end_time_s
+        description: Latest frame timestamp (seconds from recording start).
+        tests:
+          - not_null
+
+      - name: duration_s
+        description: Trajectory duration in seconds.
+        tests:
+          - not_null
+
+      - name: traveled_d_m
+        description: Source-provided total distance travelled (metres).
+        tests:
+          - not_null
+
+      - name: avg_speed_ms
+        description: Source-provided average speed (m/s).
+        tests:
+          - not_null
+
+      - name: max_speed_ms
+        description: Maximum instantaneous speed across all frames (m/s).
+        tests:
+          - not_null
+
+      - name: min_speed_ms
+        description: Minimum instantaneous speed across all frames (m/s).
+        tests:
+          - not_null
+
+      - name: avg_lon_acc_ms2
+        description: Mean longitudinal acceleration across frames (m/s²).
+        tests:
+          - not_null
+
+      - name: avg_lat_acc_ms2
+        description: Mean lateral acceleration across frames (m/s²).
+        tests:
+          - not_null
+
+      - name: max_lon_acc_ms2
+        description: Maximum absolute longitudinal acceleration (m/s²).
+        tests:
+          - not_null
+
+      - name: max_lat_acc_ms2
+        description: Maximum absolute lateral acceleration (m/s²).
+        tests:
+          - not_null
+
+      - name: start_lat
+        description: Latitude at the first frame (decimal degrees, WGS84).
+        tests:
+          - not_null
+
+      - name: start_lon
+        description: Longitude at the first frame (decimal degrees, WGS84).
+        tests:
+          - not_null
+
+      - name: end_lat
+        description: Latitude at the last frame (decimal degrees, WGS84).
+        tests:
+          - not_null
+
+      - name: end_lon
+        description: Longitude at the last frame (decimal degrees, WGS84).
+        tests:
+          - not_null
+
+  - name: dim_vehicle_type
+    description: >
+      Dimensional summary: one row per normalized vehicle_type.
+      Provides aggregate statistics for Redash filtering and vehicle-type
+      comparisons without scanning the full fact table.
+
+    columns:
+      - name: vehicle_type
+        description: Lowercased vehicle class label (unique grain).
+        tests:
+          - unique
+          - not_null
+
+      - name: trajectory_count
+        description: Total number of trajectories for this vehicle type.
+        tests:
+          - not_null
+
+      - name: average_traveled_distance_m
+        description: Mean distance travelled across all trajectories of this type (metres).
+        tests:
+          - not_null
+
+      - name: average_speed_ms
+        description: Mean average speed across all trajectories of this type (m/s).
+        tests:
+          - not_null
+
+      - name: average_duration_s
+        description: Mean trajectory duration for this vehicle type (seconds).
+        tests:
+          - not_null
