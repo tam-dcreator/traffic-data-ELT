@@ -41,7 +41,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Iterable, Iterator
 
 from traffic_data_elt.utils import get_logger
 
@@ -312,67 +312,115 @@ class PneumaExtractor:
         self._row_limit = row_limit
 
     def extract(self) -> Iterator[PneumaRecord]:
-        """Yield normalised frame records from the source file."""
+        """Yield normalised frame records from the source file.
+
+        Opens the file with the correct pNEUMA encoding (utf-8-sig) and
+        delegates all parsing to :meth:`extract_from_lines`, which contains
+        the reusable, source-agnostic parsing logic.
+        """
         source_file = self._path.name
+        log.info("extracting from %s (row_limit=%d)", source_file, self._row_limit)
+        with self._path.open(encoding="utf-8-sig") as fh:
+            yield from self.extract_from_lines(source_file, fh, row_limit=self._row_limit)
+
+    @staticmethod
+    def extract_from_lines(
+        source_file: str,
+        lines: Iterable[str],
+        *,
+        row_limit: int = 0,
+        skip_header: bool = True,
+    ) -> Iterator[PneumaRecord]:
+        """Yield normalised frame records from an iterable of text lines.
+
+        This is the reusable parsing entry point.  It is decoupled from any
+        specific source (local file, HTTP stream, Spark partition) and only
+        requires an iterable of decoded text lines.
+
+        Parameters
+        ----------
+        source_file:
+            Logical name of the source, stamped onto each record.
+        lines:
+            Any iterable yielding decoded text lines.  Lines may or may not
+            retain trailing newline characters — both are handled.
+        row_limit:
+            Maximum number of *logical* vehicle rows to process.  ``0`` means
+            no limit.
+        skip_header:
+            When ``True`` (default) the first line is discarded as a header,
+            matching the pNEUMA CSV format.
+
+        Notes
+        -----
+        Caller is responsible for supplying correctly decoded text.  For
+        pNEUMA the expected encoding is UTF-8 with BOM (``utf-8-sig``); the
+        BOM, if present on the first line, is stripped defensively.
+        """
         rows_seen = 0
         records_yielded = 0
         rows_rejected = 0
 
-        log.info("extracting from %s (row_limit=%d)", source_file, self._row_limit)
+        line_iter = iter(lines)
+        if skip_header:
+            next(line_iter, None)  # skip header
 
-        with self._path.open(encoding="utf-8-sig") as fh:
-            next(fh, None)  # skip header
+        accumulated: str = ""
+        first_line = True
 
-            accumulated: str = ""
+        for raw_line in line_iter:
+            # Defensive BOM strip in case the caller did not use utf-8-sig.
+            if first_line:
+                raw_line = raw_line.lstrip("\ufeff")
+                first_line = False
 
-            for raw_line in fh:
-                line = raw_line.rstrip("\r\n")
-                if not line:
-                    continue
+            line = raw_line.rstrip("\r\n")
+            if not line:
+                continue
 
-                if _TRACK_START.match(raw_line):
-                    if accumulated:
-                        result = self._process_logical(
-                            accumulated, source_file, rows_seen
-                        )
-                        if result is not None:
-                            frames, rejected = result
-                            rows_seen += 1
-                            if rejected:
-                                rows_rejected += 1
-                                log.warning(
-                                    "rejected track row %d in %s: %s",
-                                    rows_seen,
-                                    source_file,
-                                    rejected,
-                                )
-                            else:
-                                yield from frames
-                                records_yielded += len(frames)
-                            if self._row_limit and rows_seen >= self._row_limit:
-                                accumulated = ""
-                                break
-                    accumulated = line
+            if _TRACK_START.match(raw_line):
+                if accumulated:
+                    result = PneumaExtractor._process_logical(
+                        accumulated, source_file, rows_seen
+                    )
+                    if result is not None:
+                        frames, rejected = result
+                        rows_seen += 1
+                        if rejected:
+                            rows_rejected += 1
+                            log.warning(
+                                "rejected track row %d in %s: %s",
+                                rows_seen,
+                                source_file,
+                                rejected,
+                            )
+                        else:
+                            yield from frames
+                            records_yielded += len(frames)
+                        if row_limit and rows_seen >= row_limit:
+                            accumulated = ""
+                            break
+                accumulated = line
+            else:
+                accumulated = _concat_lines(accumulated, line)
+
+        # Flush final record.
+        if accumulated and not (row_limit and rows_seen >= row_limit):
+            result = PneumaExtractor._process_logical(accumulated, source_file, rows_seen)
+            if result is not None:
+                rows_seen += 1
+                frames, rejected = result
+                if rejected:
+                    rows_rejected += 1
+                    log.warning(
+                        "rejected track row %d in %s: %s",
+                        rows_seen,
+                        source_file,
+                        rejected,
+                    )
                 else:
-                    accumulated = _concat_lines(accumulated, line)
-
-            # Flush final record.
-            if accumulated and not (self._row_limit and rows_seen >= self._row_limit):
-                result = self._process_logical(accumulated, source_file, rows_seen)
-                if result is not None:
-                    rows_seen += 1
-                    frames, rejected = result
-                    if rejected:
-                        rows_rejected += 1
-                        log.warning(
-                            "rejected track row %d in %s: %s",
-                            rows_seen,
-                            source_file,
-                            rejected,
-                        )
-                    else:
-                        yield from frames
-                        records_yielded += len(frames)
+                    yield from frames
+                    records_yielded += len(frames)
 
         log.info(
             "finished %s: %d logical rows, %d frame records yielded, %d rejected",
