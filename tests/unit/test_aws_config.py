@@ -18,13 +18,13 @@ class TestAwsConfigFromEnv:
         monkeypatch.delenv("AWS_REGION", raising=False)
         monkeypatch.setenv("S3_BUCKET", "b")
         with pytest.raises(EnvironmentError, match="AWS_REGION"):
-            AwsConfig.from_env()
+            AwsConfig.from_env(dotenv_path=None)
 
     def test_requires_bucket(self, monkeypatch):
         monkeypatch.setenv("AWS_REGION", "eu-central-1")
         monkeypatch.delenv("S3_BUCKET", raising=False)
         with pytest.raises(EnvironmentError, match="S3_BUCKET"):
-            AwsConfig.from_env()
+            AwsConfig.from_env(dotenv_path=None)
 
     def test_defaults_applied(self, monkeypatch):
         monkeypatch.setenv("AWS_REGION", "eu-central-1")
@@ -37,7 +37,7 @@ class TestAwsConfigFromEnv:
         ):
             monkeypatch.delenv(var, raising=False)
 
-        cfg = AwsConfig.from_env()
+        cfg = AwsConfig.from_env(dotenv_path=None)
         assert cfg.region == "eu-central-1"
         assert cfg.bucket == "my-bucket"
         assert cfg.bronze_prefix == "bronze"
@@ -52,7 +52,7 @@ class TestAwsConfigFromEnv:
         monkeypatch.setenv("S3_MULTIPART_CHUNK_BYTES", "16777216")
         monkeypatch.setenv("HTTP_STREAM_CHUNK_BYTES", "524288")
 
-        cfg = AwsConfig.from_env()
+        cfg = AwsConfig.from_env(dotenv_path=None)
         assert cfg.bronze_prefix == "raw-bronze"
         assert cfg.multipart_chunk_bytes == 16777216
         assert cfg.http_chunk_bytes == 524288

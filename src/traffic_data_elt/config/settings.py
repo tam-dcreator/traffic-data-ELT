@@ -91,6 +91,7 @@ class AwsConfig:
     region: str
     bucket: str
     bronze_prefix: str = "bronze"
+    silver_prefix: str = "silver"
     multipart_chunk_bytes: int = _DEFAULT_MULTIPART_CHUNK_BYTES
     multipart_threshold_bytes: int = _DEFAULT_MULTIPART_THRESHOLD_BYTES
     http_chunk_bytes: int = _DEFAULT_HTTP_CHUNK_BYTES
@@ -112,6 +113,7 @@ class AwsConfig:
 
         Optional:
             S3_BRONZE_PREFIX               (default: bronze)
+            S3_SILVER_PREFIX               (default: silver)
             S3_MULTIPART_CHUNK_BYTES       (default: 8 MiB)
             S3_MULTIPART_THRESHOLD_BYTES   (default: 8 MiB)
             HTTP_STREAM_CHUNK_BYTES        (default: 1 MiB)
@@ -119,7 +121,8 @@ class AwsConfig:
         try:
             from dotenv import load_dotenv
 
-            load_dotenv(dotenv_path, override=False)
+            if dotenv_path is not None:
+                load_dotenv(dotenv_path, override=False)
         except ImportError:
             pass  # python-dotenv not installed; rely on ambient environment
 
@@ -127,6 +130,7 @@ class AwsConfig:
             region=_require("AWS_REGION"),
             bucket=_require("S3_BUCKET"),
             bronze_prefix=_optional("S3_BRONZE_PREFIX", "bronze"),
+            silver_prefix=_optional("S3_SILVER_PREFIX", "silver"),
             multipart_chunk_bytes=int(
                 _optional(
                     "S3_MULTIPART_CHUNK_BYTES", str(_DEFAULT_MULTIPART_CHUNK_BYTES)
@@ -155,8 +159,29 @@ class AwsConfig:
         ``AwsConfig(..., bronze_prefix="bronze").bronze_key("test", "sample.csv")``
         returns ``"bronze/test/sample.csv"``.
         """
+        return self._build_key(self.bronze_prefix, *parts)
+
+    def silver_key(self, *parts: str) -> str:
+        """Construct an S3 object key under the Silver prefix.
+
+        Joins the configured ``silver_prefix`` with the supplied path parts,
+        normalising slashes so the result never contains empty or doubled
+        segments.
+
+        Example
+        -------
+        ``AwsConfig(..., silver_prefix="silver").silver_key("pneuma", "trajectories", "test")``
+        returns ``"silver/pneuma/trajectories/test"``.
+        """
+        return self._build_key(self.silver_prefix, *parts)
+
+    def _build_key(self, prefix: str, *parts: str) -> str:
+        """Construct an S3 key from a prefix and path parts.
+
+        Normalises slashes and rejects empty results.
+        """
         segments: list[str] = []
-        for raw in (self.bronze_prefix, *parts):
+        for raw in (prefix, *parts):
             if raw is None:
                 continue
             # Split on '/' to flatten pre-joined parts and drop empties.
@@ -164,7 +189,7 @@ class AwsConfig:
                 if seg:
                     segments.append(seg)
         if not segments:
-            raise ValueError("bronze_key requires at least one non-empty segment")
+            raise ValueError("key requires at least one non-empty segment")
         return "/".join(segments)
 
 
