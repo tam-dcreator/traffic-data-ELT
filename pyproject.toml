@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "traffic-data-elt"
 version = "0.1.0"
 description = "Traffic data ELT platform with local and cloud-scale architectures"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 
 dependencies = [
     "pandas>=2.2,<3",
@@ -31,4 +31,4 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py310"

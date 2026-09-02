@@ -73,6 +73,30 @@ It starts from the official Python Dev Container image and removes the stale Yar
 
 This preserves normal APT GPG verification and does not disable package signature checking.
 
+## CLI Tooling
+
+The Dev Container provides the following CLIs:
+
+- AWS CLI and Terraform — installed via Dev Container features in `devcontainer.json`.
+- Databricks CLI — installed in the `Dockerfile` from the official pinned GitHub
+  release (`linux/amd64`), verified against its published SHA-256 checksum.
+
+The Databricks CLI is required for V2 cloud work (OAuth login, `databricks fs`
+uploads, and Asset Bundle deployment). There is no first-party Dev Container
+feature for it, so it is pinned in the `Dockerfile` to keep the version and
+integrity reproducible. The version is controlled by the `DATABRICKS_CLI_VERSION`
+build arg.
+
+To bump the version, update both `DATABRICKS_CLI_VERSION` and
+`DATABRICKS_CLI_SHA256` (the `linux_amd64.zip` checksum from the
+[release page](https://github.com/databricks/cli/releases)), then rebuild.
+
+Verify inside the container with:
+
+```bash
+databricks --version
+```
+
 ## Container Build
 
 The Dev Container was successfully built with:
