@@ -11,11 +11,12 @@
     "ghcr.io/devcontainers/features/terraform:1": {}
   },
 
-  "runArgs": [
-    "-p", "8080:8080",
-    "-p", "5000:5000",
-    "-p", "5432:5432"
-  ],
+  "forwardPorts": [8080, 5000, 5432],
+  "portsAttributes": {
+    "8080": { "label": "Airflow" },
+    "5000": { "label": "Redash" },
+    "5432": { "label": "PostgreSQL" }
+  },
 
   "customizations": {
     "vscode": {
