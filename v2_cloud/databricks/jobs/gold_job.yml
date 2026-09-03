@@ -1,0 +1,46 @@
+# Databricks Job definition — V2 Gold Pipeline (trajectory_summary)
+# Reference: https://docs.databricks.com/en/dev-tools/bundles/reference.html
+#
+# Deployment:
+#   databricks bundle deploy --target dev
+#   databricks bundle run gold_pipeline
+#
+# All secrets must be configured via Databricks Secrets — never hardcode
+# credentials in this file.  This job targets the test milestone (single
+# Silver sample → single Gold trajectory_summary dataset).
+#
+# Compute: Databricks Serverless.  No classic cluster, no DATABRICKS_CLUSTER_ID.
+
+resources:
+  jobs:
+    gold_pipeline:
+      name: "V2 Gold Pipeline — pNEUMA trajectory_summary (test)"
+      description: >
+        Reads normalised Silver frame Parquet from S3, aggregates it into the
+        trajectory-level trajectory_summary (the Spark implementation of V1
+        int_vehicle_trajectory_summary), and writes curated Gold Parquet to S3.
+
+      # Serverless compute — no job_clusters block required.
+      job_clusters: []
+
+      tasks:
+        - task_key: gold_pipeline
+          description: "S3 Silver → build_trajectory_summary → S3 Gold Parquet + strict validation"
+
+          notebook_task:
+            notebook_path: "v2_cloud/databricks/notebooks/gold_pipeline"
+            source: WORKSPACE
+
+          # Non-secret config.  AWS_REGION / S3_BUCKET resolved from cluster
+          # environment or Databricks Secrets at runtime — never hardcoded.
+          environment_variables:
+            S3_SILVER_PREFIX: "silver"
+            S3_GOLD_PREFIX: "gold"
+
+          max_retries: 0
+          timeout_seconds: 3600
+
+      # ── Notifications ──────────────────────────────────────────────────────
+      # email_notifications:
+      #   on_failure:
+      #     - your-team@example.com

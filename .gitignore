@@ -8,6 +8,11 @@ htmlcov/
 .venv/
 venv/
 
+# Python build artifacts (wheels, sdists)
+build/
+dist/
+*.whl
+
 # Environment / secrets
 .env
 .env.*

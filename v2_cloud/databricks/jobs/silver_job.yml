@@ -1,0 +1,69 @@
+# Databricks Job definition — V2 Silver Pipeline
+# Reference: https://docs.databricks.com/en/dev-tools/bundles/reference.html
+#
+# Deployment:
+#   databricks bundle deploy --target dev
+#   databricks bundle run silver_pipeline
+#
+# All secrets must be configured via Databricks Secrets — never hardcode
+# credentials in this file.  Job parameters below reference secret scopes.
+#
+# This definition targets the test milestone (single sample ZIP).
+# Production runs will replace bronze_key with a parameterised loop over all
+# archive members.
+
+resources:
+  jobs:
+    silver_pipeline:
+      name: "V2 Silver Pipeline — pNEUMA test sample"
+      description: >
+        Downloads the pNEUMA Bronze test ZIP from S3, extracts the CSV,
+        parses it with the shared PneumaExtractor, and writes normalised
+        Silver Parquet to S3.
+
+      # ── Cluster ────────────────────────────────────────────────────────────
+      # Use an existing cluster for dev to avoid spin-up cost.
+      # For production, switch to new_cluster with a job-cluster policy.
+      job_clusters: []
+
+      # ── Task ───────────────────────────────────────────────────────────────
+      tasks:
+        - task_key: silver_pipeline
+          description: "Bronze ZIP → CSV → PneumaExtractor → Spark DataFrame → S3 Silver Parquet"
+
+          # Use the notebook registered in the Databricks Repos workspace.
+          # Path must match the imported repo location.
+          notebook_task:
+            notebook_path: "v2_cloud/databricks/notebooks/silver_pipeline"
+            source: WORKSPACE
+
+          # Install the shared package on the cluster at job start.
+          # Preferred: build a wheel and reference it here or in cluster libs.
+          # libraries:
+          #   - whl: /Volumes/<catalog>/<schema>/wheels/traffic_data_elt-0.1.0-py3-none-any.whl
+
+          # ── Environment variables ─────────────────────────────────────────
+          # Reference Databricks Secrets for all sensitive values.
+          # Non-secret config is safe to set directly.
+          environment_variables:
+            # Resolved from cluster environment or Databricks Secrets at runtime.
+            # AWS_REGION and S3_BUCKET must be set on the cluster or via secrets.
+            S3_SILVER_PREFIX: "silver"
+            S3_BRONZE_PREFIX: "bronze"
+            BRONZE_KEY: "bronze/pneuma/test/pnemas-sample.zip"
+
+          # ── Retry policy ──────────────────────────────────────────────────
+          max_retries: 0
+          timeout_seconds: 3600
+
+      # ── Notifications ──────────────────────────────────────────────────────
+      # email_notifications:
+      #   on_failure:
+      #     - your-team@example.com
+
+      # ── Schedule ──────────────────────────────────────────────────────────
+      # Uncomment to run on a schedule for production ingestion.
+      # schedule:
+      #   quartz_cron_expression: "0 0 3 * * ?"
+      #   timezone_id: "UTC"
+      #   pause_status: PAUSED
