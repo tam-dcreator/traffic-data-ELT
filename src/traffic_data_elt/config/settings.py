@@ -92,6 +92,7 @@ class AwsConfig:
     bucket: str
     bronze_prefix: str = "bronze"
     silver_prefix: str = "silver"
+    gold_prefix: str = "gold"
     multipart_chunk_bytes: int = _DEFAULT_MULTIPART_CHUNK_BYTES
     multipart_threshold_bytes: int = _DEFAULT_MULTIPART_THRESHOLD_BYTES
     http_chunk_bytes: int = _DEFAULT_HTTP_CHUNK_BYTES
@@ -114,6 +115,7 @@ class AwsConfig:
         Optional:
             S3_BRONZE_PREFIX               (default: bronze)
             S3_SILVER_PREFIX               (default: silver)
+            S3_GOLD_PREFIX                 (default: gold)
             S3_MULTIPART_CHUNK_BYTES       (default: 8 MiB)
             S3_MULTIPART_THRESHOLD_BYTES   (default: 8 MiB)
             HTTP_STREAM_CHUNK_BYTES        (default: 1 MiB)
@@ -124,6 +126,7 @@ class AwsConfig:
             if dotenv_path is not None:
                 load_dotenv(dotenv_path, override=False)
         except ImportError:
+            print("Python-dotenv not installed,using on system env variables")
             pass  # python-dotenv not installed; rely on ambient environment
 
         return cls(
@@ -131,6 +134,7 @@ class AwsConfig:
             bucket=_require("S3_BUCKET"),
             bronze_prefix=_optional("S3_BRONZE_PREFIX", "bronze"),
             silver_prefix=_optional("S3_SILVER_PREFIX", "silver"),
+            gold_prefix=_optional("S3_GOLD_PREFIX", "gold"),
             multipart_chunk_bytes=int(
                 _optional(
                     "S3_MULTIPART_CHUNK_BYTES", str(_DEFAULT_MULTIPART_CHUNK_BYTES)
@@ -174,6 +178,20 @@ class AwsConfig:
         returns ``"silver/pneuma/trajectories/test"``.
         """
         return self._build_key(self.silver_prefix, *parts)
+
+    def gold_key(self, *parts: str) -> str:
+        """Construct an S3 object key under the Gold prefix.
+
+        Joins the configured ``gold_prefix`` with the supplied path parts,
+        normalising slashes so the result never contains empty or doubled
+        segments.
+
+        Example
+        -------
+        ``AwsConfig(..., gold_prefix="gold").gold_key("pneuma", "trajectory_summary", "test")``
+        returns ``"gold/pneuma/trajectory_summary/test"``.
+        """
+        return self._build_key(self.gold_prefix, *parts)
 
     def _build_key(self, prefix: str, *parts: str) -> str:
         """Construct an S3 key from a prefix and path parts.

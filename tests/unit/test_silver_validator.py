@@ -58,9 +58,11 @@ def _inject_pyspark_stubs() -> None:
     pyspark_sql_functions.col = MagicMock(side_effect=lambda name: _FakeColumn())
 
     pyspark_sql_types = types.ModuleType("pyspark.sql.types")
+    # Superset of types used by both the Silver and Gold schema stubs so this
+    # stub is safe regardless of which validator test injects it first.
     for cls_name in (
         "StructType", "StructField", "StringType", "IntegerType",
-        "DoubleType", "TimestampType",
+        "LongType", "DoubleType", "TimestampType",
     ):
         setattr(pyspark_sql_types, cls_name, MagicMock(name=cls_name))
 
