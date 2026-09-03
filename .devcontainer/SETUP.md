@@ -80,6 +80,9 @@ The Dev Container provides the following CLIs:
 - AWS CLI and Terraform — installed via Dev Container features in `devcontainer.json`.
 - Databricks CLI — installed in the `Dockerfile` from the official pinned GitHub
   release (`linux/amd64`), verified against its published SHA-256 checksum.
+- Neon CLI (`neon`) — installed in the `Dockerfile` from the official pinned
+  GitHub release (`neon-linux-x64`), verified against its published SHA-256
+  checksum.
 
 The Databricks CLI is required for V2 cloud work (OAuth login, `databricks fs`
 uploads, and Asset Bundle deployment). There is no first-party Dev Container
@@ -95,6 +98,69 @@ Verify inside the container with:
 
 ```bash
 databricks --version
+```
+
+### Neon CLI (`neon`)
+
+The Neon CLI is required for the V2 serving-warehouse work (authenticating to
+Neon, managing projects/branches, and retrieving connection strings for the
+shared dbt project and psycopg loaders).
+
+The `neon` CLI (the agent toolkit: `neon auth`, `api-keys`, `projects`,
+`branches`, `skills`, `mcp`, `deploy`) is installed the same way as the
+Databricks CLI: the official standalone `neon-linux-x64` binary is downloaded
+from the pinned GitHub release and verified against its SHA-256 checksum before
+being placed on `PATH`. This deliberately avoids a global npm install
+(`npm i -g neon@latest`) — no other tool in the image needs Node/npm, so
+keeping it out avoids an unnecessary toolchain and image bloat. The version is
+controlled by the `NEON_VERSION` build arg.
+
+> The `neon` binary is pinned via its **concrete release tag**
+> (`neon@<version>`), not the floating `.../releases/latest/download/...`
+> redirect, so the version and checksum stay reproducible across rebuilds.
+> This is the `neon` CLI, not the older `neonctl`.
+
+#### Authentication in a headless container
+
+Interactive OAuth (`neon auth`) opens a browser via `xdg-open`, which **fails in
+this headless dev container** — there is no browser and the localhost OAuth
+callback is not reachable. This is an environment limitation, not a CLI defect;
+it affects any browser-OAuth CLI (both `neon` and `neonctl`).
+
+Authenticate non-interactively with a Neon **API key** instead. The key lives in
+the untracked `v2_cloud/.env` file (never in the committed `v2_cloud/.env.example`
+and never elsewhere in the repository):
+
+```bash
+# 1. Create the key once from a machine with a browser
+#    (Neon console → Account settings → API keys).
+# 2. Put it in v2_cloud/.env:
+#       NEON_API_KEY=<your key>
+# 3. Load v2_cloud/.env into the shell, then verify without a browser:
+set -a; source v2_cloud/.env; set +a
+#4. Test that it was loaded successfully
+test -n "$NEON_API_KEY" && echo "NEON_API_KEY is set"
+neon me
+```
+
+The `neon` CLI reads `NEON_API_KEY` automatically (it is the default for the
+`--api-key` flag), so no `neon auth` browser step is needed once the key is set.
+
+`v2_cloud/.env` is gitignored; only `v2_cloud/.env.example` (placeholders only)
+is committed. The Neon PostgreSQL connection parameters used later by the shared
+dbt project / psycopg loaders (`NEON_DB_HOST`, `NEON_DB_PORT`, `NEON_DB_NAME`,
+`NEON_DB_USER`, `NEON_DB_PASSWORD`, `NEON_DB_SSLMODE`) live in the same file —
+retrieve them from the Neon console or `neon connection-string <branch>`.
+
+To bump the version, update both `NEON_VERSION` and `NEON_SHA256` (the
+`neon-linux-x64` checksum from the concrete tag on the
+[release page](https://github.com/neondatabase/neon-pkgs/releases)), then
+rebuild.
+
+Verify inside the container with:
+
+```bash
+neon --version
 ```
 
 ## Container Build
