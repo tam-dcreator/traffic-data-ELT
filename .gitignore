@@ -49,3 +49,5 @@ Thumbs.db
 
 # dbt user config file
 .user.yml
+# Added by ggshield
+.cache_ggshield
