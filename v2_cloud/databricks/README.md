@@ -376,6 +376,7 @@ Common to all pipeline notebooks:
 | `NEON_COPY_BATCH_SIZE` | no | `10000` | Rows per bounded COPY batch |
 | `EXPECTED_ROW_COUNT` / `EXPECTED_FRAME_SUM` | no | — | Fixture mode only: expected serving row count / frame sum |
 | `ALLOW_PRODUCTION_WRITE` | no | `false` | Must be `true` to publish when `NEON_BRANCH` is `production`/`prod` |
+| `DROP_TEMP_VOLUME_ON_SUCCESS` | no | `false` | Opt-in: drop the `v2_temp` UC volume after a successful load (clean-slate rebuild). Uses `UC_CATALOG`/`UC_SCHEMA`/`UC_VOLUME` to locate it |
 
 The Neon **password** is never a job parameter — it is read at runtime from the
 Databricks secret scope/key (`NEON_SECRET_SCOPE`/`NEON_SECRET_KEY`).

@@ -6,10 +6,11 @@ Deterministic artifact deployment for the Databricks runtime:
 1. Build the project wheel (contains the shared parser + the
    ``traffic_data_elt.databricks`` runtime modules).
 2. Stamp the version + git SHA for traceability.
-3. Upload the wheel to a configurable Databricks/UC artifact path using a
+3. Create the target UC artifact volume if it does not already exist.
+4. Upload the wheel to a configurable Databricks/UC artifact path using a
    Databricks CLI profile.
-4. Verify the upload.
-5. Print the deployed wheel path for job submission.
+5. Verify the upload.
+6. Print the deployed wheel path for job submission.
 
 The wheel is a **deployment artifact**, not temporary ETL data — it is NOT
 deleted after a pipeline run. The ``v2_temp`` volume remains for temporary
@@ -71,6 +72,44 @@ def _db(profile: str, *args: str) -> subprocess.CompletedProcess:
     return _run(["databricks", *prefix, *args])
 
 
+def _parse_volume(artifact_path: str) -> tuple[str, str, str] | None:
+    """Return ``(catalog, schema, volume)`` from a UC volume artifact path.
+
+    A UC volume path looks like ``/Volumes/<catalog>/<schema>/<volume>/...``.
+    Returns ``None`` for non-``/Volumes/`` paths (e.g. plain DBFS), where there
+    is no UC volume to create.
+    """
+    parts = artifact_path.strip("/").split("/")
+    if len(parts) >= 4 and parts[0] == "Volumes":
+        return parts[1], parts[2], parts[3]
+    return None
+
+
+def _ensure_volume(profile: str, artifact_path: str) -> None:
+    """Create the UC volume for *artifact_path* if it does not already exist.
+
+    UC volumes cannot be created with ``fs mkdirs`` (that only makes a
+    sub-directory inside an existing volume), so this issues an idempotent
+    ``volumes create``. No-op for non-UC-volume paths.
+    """
+    parsed = _parse_volume(artifact_path)
+    if parsed is None:
+        return
+    catalog, schema, volume = parsed
+    # Idempotent: check existence first, then create only if absent.
+    existing = _db(profile, "volumes", "read", f"{catalog}.{schema}.{volume}")
+    if existing.returncode == 0:
+        print(f"artifact volume exists: {catalog}.{schema}.{volume}")
+        return
+    created = _db(profile, "volumes", "create", catalog, schema, volume, "MANAGED")
+    if created.returncode != 0:
+        raise RuntimeError(
+            f"could not create UC volume {catalog}.{schema}.{volume}: "
+            f"{created.stderr.strip()}"
+        )
+    print(f"created artifact volume: {catalog}.{schema}.{volume} (MANAGED)")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Build + deploy the project wheel to Databricks.")
     ap.add_argument("--databricks-profile", required=True)
@@ -97,7 +136,13 @@ def main() -> int:
     # Databricks fs cp addresses UC volume paths under dbfs:.
     dest = f"dbfs:{dest_dir}/{wheel.name}"
 
-    # Ensure the artifact directory exists (idempotent).
+    # Ensure the UC artifact volume exists (create if missing), then the
+    # wheels sub-directory inside it (idempotent).
+    try:
+        _ensure_volume(args.databricks_profile, dest_dir)
+    except RuntimeError as exc:
+        print(f"FAIL: {exc}", file=sys.stderr)
+        return 1
     _db(args.databricks_profile, "fs", "mkdirs", f"dbfs:{dest_dir}")
 
     # Optional prune of stale wheels for this package (explicit only).

@@ -104,6 +104,16 @@ neon_secret_scope = _cfg("NEON_SECRET_SCOPE", "v2-neon")
 neon_secret_key = _cfg("NEON_SECRET_KEY", "db-password")
 neon_password = dbutils.secrets.get(scope=neon_secret_scope, key=neon_secret_key)
 
+# ── Optional temp-volume teardown (opt-in) ────────────────────────────────────
+# The serving job does not itself use the Silver working volume (v2_temp), but
+# it can drop it after a successful Neon load to leave a clean slate for a
+# from-scratch end-to-end rebuild. Default OFF so a normal run never destroys a
+# volume the Silver job depends on. Enable with DROP_TEMP_VOLUME_ON_SUCCESS=true.
+drop_temp_volume = _cfg("DROP_TEMP_VOLUME_ON_SUCCESS", "false").lower() == "true"
+temp_uc_catalog = _cfg("UC_CATALOG", "workspace")
+temp_uc_schema = _cfg("UC_SCHEMA", "default")
+temp_uc_volume = _cfg("UC_VOLUME", "v2_temp")
+
 # ── Production protection: configuration/environment based (NOT host substring)
 # The deployment preflight (scripts/validate_neon_target.py) confirms the
 # configured DB endpoint belongs to the configured Neon branch via the control
@@ -186,6 +196,32 @@ assert result.status == "success", f"Neon load failed: {result.error}"
 if fixture_mode and expected_frame_sum is not None:
     assert result.frames_conserved(expected_frame_sum), "frame conservation FAILED"
 print("✓ Gold → Neon serving load complete")
+
+# COMMAND ----------
+# MAGIC %md ## 3b. (Opt-in) Drop the temporary Silver working volume
+# MAGIC
+# MAGIC Only runs after a **successful** Neon load and only when
+# MAGIC `DROP_TEMP_VOLUME_ON_SUCCESS=true`. Intended for a clean-slate
+# MAGIC end-to-end rebuild — it removes the whole `v2_temp` UC volume, which the
+# MAGIC Silver job would then need recreated (see
+# MAGIC `v2_cloud/databricks/setup/create_uc_volume.sql`). The persistent wheel
+# MAGIC artifact volume (`v2_artifacts`) is never touched here.
+
+# COMMAND ----------
+
+if drop_temp_volume:
+    # Reusable packaged teardown — identical call an Airflow DAG would make.
+    from traffic_data_elt.databricks.bronze_reader import drop_temp_volume as _drop_temp_volume
+
+    _temp_fqn = _drop_temp_volume(
+        spark,
+        catalog=temp_uc_catalog,
+        schema=temp_uc_schema,
+        volume=temp_uc_volume,
+    )
+    print(f"✓ dropped temporary volume {_temp_fqn} (recreate before next Silver run)")
+else:
+    print("temp-volume teardown skipped (DROP_TEMP_VOLUME_ON_SUCCESS not set)")
 
 # COMMAND ----------
 # MAGIC %md ## 4. Measure real Neon storage

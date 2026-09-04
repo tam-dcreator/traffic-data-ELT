@@ -30,6 +30,7 @@ from traffic_data_elt.databricks.bronze_reader import (
     _select_csv_members,
     _zip_filename_from_key,
     download_and_extract,
+    drop_temp_volume,
     list_bronze_zip_members,
     make_run_dir,
     uc_volume_path,
@@ -121,6 +122,51 @@ class TestUcVolumePath:
     def test_returns_path_object(self):
         result = uc_volume_path(catalog="c", schema="s", volume="v")
         assert isinstance(result, Path)
+
+
+# ---------------------------------------------------------------------------
+# drop_temp_volume
+# ---------------------------------------------------------------------------
+
+class TestDropTempVolume:
+    def test_issues_drop_sql_with_explicit_coords(self):
+        spark = MagicMock()
+        fqn = drop_temp_volume(spark, catalog="c", schema="s", volume="v2_temp")
+        assert fqn == "c.s.v2_temp"
+        spark.sql.assert_called_once_with("DROP VOLUME IF EXISTS c.s.v2_temp")
+
+    def test_defaults_from_env(self, monkeypatch):
+        monkeypatch.setenv("UC_CATALOG", "mycat")
+        monkeypatch.setenv("UC_SCHEMA", "mysch")
+        monkeypatch.setenv("UC_VOLUME", "mytemp")
+        spark = MagicMock()
+        fqn = drop_temp_volume(spark)
+        assert fqn == "mycat.mysch.mytemp"
+        spark.sql.assert_called_once_with("DROP VOLUME IF EXISTS mycat.mysch.mytemp")
+
+    def test_default_fallbacks_without_env(self, monkeypatch):
+        for var in ("UC_CATALOG", "UC_SCHEMA", "UC_VOLUME"):
+            monkeypatch.delenv(var, raising=False)
+        spark = MagicMock()
+        fqn = drop_temp_volume(spark)
+        assert fqn == "workspace.default.v2_temp"
+
+    def test_refuses_protected_artifact_volume(self):
+        spark = MagicMock()
+        with pytest.raises(ValueError, match="protected volume"):
+            drop_temp_volume(spark, catalog="workspace", schema="default", volume="v2_artifacts")
+        spark.sql.assert_not_called()
+
+    def test_refuses_protected_volume_via_env(self, monkeypatch):
+        monkeypatch.setenv("UC_VOLUME", "v2_artifacts")
+        spark = MagicMock()
+        with pytest.raises(ValueError, match="protected volume"):
+            drop_temp_volume(spark)
+        spark.sql.assert_not_called()
+
+    def test_requires_spark_session(self):
+        with pytest.raises(ValueError, match="requires a spark"):
+            drop_temp_volume(None, catalog="c", schema="s", volume="v2_temp")
 
 
 # ---------------------------------------------------------------------------
