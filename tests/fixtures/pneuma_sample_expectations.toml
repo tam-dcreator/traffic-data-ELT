@@ -1,0 +1,86 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# pNEUMA integration-test fixture expectations
+# ─────────────────────────────────────────────────────────────────────────────
+# Single source of truth for the values that describe the CURRENT pNEUMA sample
+# used by the opt-in integration tests. These are TEST-FIXTURE values only.
+#
+# RULES
+# - Runtime/production code MUST NOT import this file. Production validates data
+#   invariants (row_count > 0, grain unique, frame_count > 0, ...) — never these
+#   fixture-specific counts.
+# - Only integration tests and fixture-consuming helpers read this manifest.
+# - Contains NO account/environment specifics: no S3 bucket, no Neon host,
+#   no project/org/branch IDs, no passwords, no Databricks workspace host.
+#
+# HOW TO UPDATE
+# - If the integration sample CSV changes, re-run the Silver + Gold pipelines,
+#   read the reported counts, and update [source], [silver], [gold] below.
+# - Keep this file in sync with data/sample/ (the checked-in sample) and the
+#   validated Silver/Gold outputs.
+
+[source]
+# Logical source filename stamped onto every record by the pNEUMA parser.
+# Stage: Bronze extraction → carried through Silver/Gold as `source_file`.
+
+file_name = "pnemas.csv"
+
+# Bronze ZIP member name (the compressed archive object in S3 Bronze).
+# Stage: Bronze. Account-agnostic object *name* only (no bucket/prefix).
+
+bronze_zip_name = "pnemas-sample.zip"
+
+[layer_suffix]
+# Logical suffix used by the INTEGRATION FIXTURE only to isolate test data from
+# production data within a bucket. Production runtime does NOT default to this;
+# it requires an explicit input path / prefix. Stage: all layers (test runs).
+
+test = "test"
+
+[silver]
+# Expected Silver frame-level row count for this sample.
+# Stage: Silver (one row per trajectory frame). Unit: rows.
+
+frame_rows = 1_446_887
+
+# Expected count of distinct logical vehicles parsed from the sample.
+# Stage: Silver parse. Unit: vehicles.
+
+logical_vehicles = 922
+
+# Expected count of rejected/malformed logical records for this sample.
+# Stage: Silver parse. Unit: records.
+
+rejected_records = 0
+
+[gold]
+# Expected Gold trajectory rows (one per (source_file, track_id)).
+# Stage: Gold aggregation. Unit: trajectories.
+
+trajectories = 922
+
+# Frame conservation: SUM(frame_count) over Gold must equal Silver frame_rows.
+# Stage: Gold → serving invariant. Unit: frames.
+
+sum_frame_count = 1_446_887
+
+[serving]
+# Expected Neon serving row count (equals Gold trajectories for a full-snapshot
+# fixture load). Stage: Neon serving. Unit: rows.
+
+row_count = 922
+
+[coordinates]
+# Athens pNEUMA study-area bounding box used for coordinate validation.
+# Stage: Silver validation. Unit: decimal degrees (WGS84). Architecture constant
+# for the pNEUMA Athens dataset (not account-specific).
+
+lat_min = 37.9
+lat_max = 38.1
+lon_min = 23.6
+lon_max = 23.9
+
+[tolerance]
+# Absolute tolerance for floating-point parity comparison of trajectory metrics
+# between V1 dbt and V2 Spark/Neon. Stage: V1/V2 parity tests. Unitless.
+
+float_abs = 1e-6
