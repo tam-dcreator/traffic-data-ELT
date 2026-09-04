@@ -1,6 +1,6 @@
 {{
   config(
-    materialized = 'table',
+    materialized = ('view' if is_v2_target() else 'table'),
     schema = 'marts'
   )
 }}
@@ -8,10 +8,18 @@
 /*
   fct_vehicle_trajectories
   ────────────────────────
-  Fact table: one row per vehicle trajectory (source_file, track_id).
+  Fact: one row per vehicle trajectory (source_file, track_id).
 
-  Built from the intermediate trajectory summary. Exposes a reporting-ready
-  fact model for trajectory analysis and dashboard consumption.
+  Built from the target-aware semantic adapter (int_trajectory_summary_source,
+  ephemeral), so the exact same model serves both environments:
+
+    V1        → adapter inlines int_vehicle_trajectory_summary  (materialized as a TABLE)
+    V2 (v2_*) → adapter inlines Neon serving.gold_trajectory_summary (materialized as a VIEW)
+
+  Materialization is target-aware.  Under V2 the serving table already holds
+  physical trajectory-level rows, so re-materialising a full copy would only
+  duplicate storage in the deliberately constrained Neon budget — a VIEW is
+  used instead.  Under V1 the historical TABLE materialization is preserved.
 */
 
 with trajectories as (
@@ -36,7 +44,7 @@ with trajectories as (
         start_lon,
         end_lat,
         end_lon
-    from {{ ref('int_vehicle_trajectory_summary') }}
+    from {{ ref('int_trajectory_summary_source') }}
 
 )
 

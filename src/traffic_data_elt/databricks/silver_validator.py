@@ -105,7 +105,7 @@ def validate_silver(
     SilverValidationError
         Only for fatal framework errors (e.g. Spark unavailable).
     """
-    from v2_cloud.databricks.schemas.silver_schema import (
+    from traffic_data_elt.databricks.schemas.silver_schema import (
         LAT_MAX,
         LAT_MIN,
         LON_MAX,

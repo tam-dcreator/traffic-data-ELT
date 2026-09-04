@@ -322,6 +322,66 @@ Secrets or the CLI OAuth profile — never `.env`.
 
 ---
 
+## Job parameters (per-run runtime inputs)
+
+These are **not** `.env`/account configuration — they are per-run inputs passed
+to the Databricks notebooks as **job parameters** (notebook widgets), e.g. in a
+job's `base_parameters` or the `databricks jobs submit` JSON. Each notebook
+resolves a value in this order via its `_cfg()` helper:
+
+```
+notebook widget  →  environment variable (same name)  →  default
+```
+
+Required inputs have **no default** (the notebook asserts them) so a production
+run can never silently fall back to a `/test/` fixture path. This is why paths
+like `GOLD_INPUT_PATH` intentionally do **not** appear in `.env.example`.
+
+Common to all pipeline notebooks:
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `WHEEL_PATH` | no | conventional artifact path | Versioned wheel to `%pip install` (see `scripts/deploy_databricks_artifact.py`) |
+
+`silver_pipeline`:
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `S3_BUCKET` | yes | — | S3 bucket name |
+| `BRONZE_KEY` | yes | — | S3 object key of the Bronze ZIP |
+| `SILVER_OUTPUT_PATH` | yes | — | Full `s3://` path for the Silver Parquet output |
+| `UC_CATALOG` / `UC_SCHEMA` / `UC_VOLUME` | no | `workspace` / `default` / `v2_temp` | UC volume for temp ZIP/CSV extraction |
+| `EXPECTED_FRAME_ROWS` | no | — | Fixture mode only: asserts the exact Silver frame-row count |
+
+`gold_pipeline`:
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `SILVER_INPUT_PATH` | yes | — | Full `s3://` path to the Silver Parquet input |
+| `GOLD_OUTPUT_PATH` | yes | — | Full `s3://` path for the Gold Parquet output |
+| `EXPECTED_SILVER_FRAMES` | no | — | Fixture mode only: expected Silver frame count |
+| `EXPECTED_GOLD_TRAJECTORIES` | no | — | Fixture mode only: expected Gold trajectory count |
+| `EXPORT_DIR` | no | — | Optional dir for the off-cluster parity export JSON |
+
+`serving_pipeline`:
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `GOLD_INPUT_PATH` | yes | — | Full `s3://`/`dbfs:` path to the Gold Parquet to load |
+| `NEON_DB_HOST` / `NEON_DB_NAME` / `NEON_DB_USER` | yes | — | Neon data-plane connection (non-secret) |
+| `NEON_DB_PORT` / `NEON_DB_SSLMODE` | no | `5432` / `require` | Neon connection tuning |
+| `NEON_SECRET_SCOPE` / `NEON_SECRET_KEY` | no | `v2-neon` / `db-password` | Databricks secret holding the Neon password |
+| `NEON_BRANCH` | no | — | Logical Neon branch/env identifier (informational + production guard) |
+| `LOAD_MODE` | no | `replace_sources` | `replace_sources` (source-scoped) or `replace_snapshot` (full refresh) |
+| `NEON_COPY_BATCH_SIZE` | no | `10000` | Rows per bounded COPY batch |
+| `EXPECTED_ROW_COUNT` / `EXPECTED_FRAME_SUM` | no | — | Fixture mode only: expected serving row count / frame sum |
+| `ALLOW_PRODUCTION_WRITE` | no | `false` | Must be `true` to publish when `NEON_BRANCH` is `production`/`prod` |
+
+The Neon **password** is never a job parameter — it is read at runtime from the
+Databricks secret scope/key (`NEON_SECRET_SCOPE`/`NEON_SECRET_KEY`).
+
+---
+
 ## Testing
 
 ```bash
@@ -416,37 +476,118 @@ reused — the Gold runtime path is pure standard library.
 
 ---
 
-## Code deployment — temporary development mechanism (technical debt)
+## Code deployment — versioned wheel artifact
 
-The `v2_cloud/databricks/*` modules live outside `src/` and are therefore **not**
-part of the `traffic-data-elt` wheel. For active development they are synced to
-a Unity Catalog volume `code/` path and added to `sys.path` at notebook startup:
+The reusable Databricks runtime modules live in the installable package
+`src/traffic_data_elt/databricks/` (parser, silver/gold/serving logic,
+schemas). They ship inside the `traffic-data-elt` wheel, so notebooks import
+`traffic_data_elt.databricks.*` from a versioned artifact — **no UC-volume
+source sync, no `sys.path` shim**.
+
+Only orchestration assets stay under `v2_cloud/databricks/` (notebooks, job
+definitions, one-time setup SQL).
+
+### Deploy the wheel
+
+```bash
+python scripts/deploy_databricks_artifact.py \
+    --databricks-profile <profile> \
+    --artifact-path /Volumes/<catalog>/<schema>/v2_artifacts/wheels
+# prints WHEEL_PATH=<dest>/traffic_data_elt-<version>-py3-none-any.whl
+```
+
+Pass the reported `WHEEL_PATH` as a job parameter; each notebook installs that
+exact wheel in Cell 0. The wheel is a **deployment artifact** (not deleted per
+run). The `v2_temp` volume remains for temporary ZIP/CSV processing only; the
+artifact path is separate and configurable.
+
+---
+
+## Serving — S3 Gold → Neon dev → shared dbt marts
+
+The serving layer publishes the Spark Gold `trajectory_summary` into Neon
+PostgreSQL and exposes it through the existing shared dbt marts.
+
+### Flow
 
 ```
-v2_cloud/databricks/*.py
-    →  /Volumes/workspace/default/v2_temp/code/v2_cloud/databricks/
-    →  sys.path.insert(0, "/Volumes/workspace/default/v2_temp/code")
+S3 Gold trajectory_summary Parquet   (GOLD_INPUT_PATH — explicit)
+    ↓  spark.read.parquet  (UC external location — no boto3, no keys)
+    ↓  neon_loader.load_gold_to_neon(...)  — bounded COPY over TLS (toLocalIterator)
+    ↓  serving.gold_trajectory_summary__staging_<run_id>  (staged + validated)
+    ↓  publish per LOAD_MODE:
+    ↓    replace_sources (default) → source-scoped DELETE + INSERT (one tx)
+    ↓    replace_snapshot (explicit) → TRUNCATE + INSERT (one tx)
+    ↓  serving.gold_trajectory_summary   (Neon, configured branch)
+    ↓  dbt marts (shared): fct_vehicle_trajectories (view), dim_vehicle_type
 ```
 
-This is a **temporary development sync**, not the production packaging story.
-Both the Silver and Gold notebooks use it.
+Silver → Spark → Gold → Neon is direct; no extra durable layer. The heavy
+computation stays in Spark. Neon holds compact relational serving data only
+(no Bronze, no Silver frame-level rows). dbt owns the semantic marts.
 
-```
-current development code sync   →  temporary UC-volume sync + sys.path
-future production packaging     →  separate milestone (wheel or bundle-managed)
-```
+### Neon environments and safety
 
-A future milestone should package these modules (wheel or Databricks Asset
-Bundle file sync) so no manual UC-volume sync is required.
+- Targets the configured Neon branch (`NEON_BRANCH`). This milestone uses
+  `dev`; `production` is never written. Production writes require an explicit
+  `ALLOW_PRODUCTION_WRITE=true`, so a stray target cannot be published by
+  accident.
+- Control-plane operations use the `neon` CLI with `NEON_API_KEY` (see
+  `.devcontainer/SETUP.md`). The API key is **not** a database password.
+- The data-plane connection uses `NEON_DB_*` (`sslmode=require`). The password
+  is supplied to the Databricks job via a **configurable** secret scope/key
+  (`NEON_SECRET_SCOPE` / `NEON_SECRET_KEY`, default `v2-neon` / `db-password`) —
+  never a widget, YAML, notebook, or Git.
+- Target correctness (the configured `NEON_DB_HOST` belongs to `NEON_BRANCH`) is
+  verified **before deployment** by `scripts/validate_neon_target.py` against
+  the Neon control plane — not by a hardcoded endpoint substring in the notebook.
+
+### Loader / publish (`neon_loader.py`)
+
+- `load_gold_to_neon(gold_df, conninfo, run_id, load_mode=...)` streams rows
+  with `toLocalIterator()` and bounded `COPY` batches (configurable
+  `copy_batch_size`; no full `collect()`), stages into a run-scoped table,
+  validates it (invariants always; fixture counts only when supplied), then
+  publishes per `load_mode`:
+  - **`replace_sources`** (default): source-scoped `DELETE ... WHERE source_file
+    IN (staged sources)` + `INSERT`, one transaction. New source files are
+    preserved; reprocessing a source replaces only its rows; reruns are
+    idempotent. Takes only `ROW EXCLUSIVE` locks (MVCC readers unaffected).
+  - **`replace_snapshot`** (explicit): `TRUNCATE + INSERT`, one transaction —
+    full refresh. `TRUNCATE` takes an `ACCESS EXCLUSIVE` lock (not lock-free);
+    reserved for explicit full refreshes.
+- A failed staging load leaves the current serving table intact; staging is
+  cleaned only after a successful publish. Single-writer assumption documented
+  in the module.
+- The serving contract is `schemas/serving_schema.py` (19 columns, composite
+  PRIMARY KEY on `(source_file, track_id)`, no speculative indexes).
+
+### dbt V2 target
+
+The shared `dbt/traffic_dwh` project adds V2 targets named `v2_<neon-branch>`
+(e.g. `v2_dev`). V2 detection uses the `is_v2_target()` macro (target name
+starts with `v2_`), not a hardcoded branch list. V2 does **not** run
+`stg_*`/`int_*`; its source is `serving.gold_trajectory_summary`. A target-aware
+**ephemeral** adapter, `int_trajectory_summary_source`, feeds the shared marts
+from either the V1 intermediate model (V1) or the serving source (V2) without
+creating a redundant Neon view. `fct_vehicle_trajectories` is a **view** under
+V2 (the serving table already holds the rows) and a table under V1.
+
+Exact V2 commands (with `NEON_DB_*` exported and `DBT_PROFILES_DIR` set):
+
+```bash
+dbt build --target v2_dev --select int_trajectory_summary_source+ source:v2_serving
+dbt docs generate --target v2_dev
+```
 
 ---
 
 ## What is not in scope for this milestone
 
 - Additional Gold datasets: `traffic_metrics`, `vehicle_type_metrics`, time
-  aggregates, area aggregates (this branch proves `trajectory_summary` only)
-- Neon / Cloud PostgreSQL loading
-- V2 dbt models / target changes
+  aggregates, area aggregates
+- Neon **production** promotion / branch merge (dev only here)
+- CI-generated Neon branches
 - Full V2 Airflow orchestration DAG
 - Full production archive processing (~15 GB)
 - Production code packaging/deployment redesign

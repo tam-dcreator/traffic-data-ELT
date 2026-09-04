@@ -100,7 +100,7 @@ def validate_gold(
     GoldValidationResult
         All check outcomes.  Check ``.passed`` before proceeding.
     """
-    from v2_cloud.databricks.schemas.gold_schema import (
+    from traffic_data_elt.databricks.schemas.gold_schema import (
         GOLD_FIELD_NAMES,
         GOLD_GRAIN_KEYS,
         GOLD_NON_NULLABLE_FIELDS,

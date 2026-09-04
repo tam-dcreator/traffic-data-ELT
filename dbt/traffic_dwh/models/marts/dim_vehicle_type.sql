@@ -21,7 +21,7 @@ with trajectories as (
         traveled_d_m,
         avg_speed_ms,
         duration_s
-    from {{ ref('int_vehicle_trajectory_summary') }}
+    from {{ ref('int_trajectory_summary_source') }}
 
 ),
 
