@@ -31,26 +31,20 @@ resources:
         - task_key: silver_pipeline
           description: "Bronze ZIP → CSV → PneumaExtractor → Spark DataFrame → S3 Silver Parquet"
 
-          # Use the notebook registered in the Databricks Repos workspace.
-          # Path must match the imported repo location.
           notebook_task:
             notebook_path: "v2_cloud/databricks/notebooks/silver_pipeline"
             source: WORKSPACE
+            # Explicit, non-account parameters (no /test/ default). Fill at
+            # deploy time. EXPECTED_FRAME_ROWS is optional (fixture mode only).
+            base_parameters:
+              WHEEL_PATH: "${var.wheel_path}"
+              S3_BUCKET: "${var.s3_bucket}"
+              BRONZE_KEY: "${var.bronze_key}"
+              SILVER_OUTPUT_PATH: "${var.silver_output_path}"
+              # EXPECTED_FRAME_ROWS: "..."   # set only for fixture runs
 
-          # Install the shared package on the cluster at job start.
-          # Preferred: build a wheel and reference it here or in cluster libs.
-          # libraries:
-          #   - whl: /Volumes/<catalog>/<schema>/wheels/traffic_data_elt-0.1.0-py3-none-any.whl
-
-          # ── Environment variables ─────────────────────────────────────────
-          # Reference Databricks Secrets for all sensitive values.
-          # Non-secret config is safe to set directly.
-          environment_variables:
-            # Resolved from cluster environment or Databricks Secrets at runtime.
-            # AWS_REGION and S3_BUCKET must be set on the cluster or via secrets.
-            S3_SILVER_PREFIX: "silver"
-            S3_BRONZE_PREFIX: "bronze"
-            BRONZE_KEY: "bronze/pneuma/test/pnemas-sample.zip"
+          # The versioned wheel is installed inside the notebook from WHEEL_PATH
+          # (see scripts/deploy_databricks_artifact.py). No sys.path source sync.
 
           # ── Retry policy ──────────────────────────────────────────────────
           max_retries: 0

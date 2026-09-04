@@ -30,12 +30,15 @@ resources:
           notebook_task:
             notebook_path: "v2_cloud/databricks/notebooks/gold_pipeline"
             source: WORKSPACE
-
-          # Non-secret config.  AWS_REGION / S3_BUCKET resolved from cluster
-          # environment or Databricks Secrets at runtime — never hardcoded.
-          environment_variables:
-            S3_SILVER_PREFIX: "silver"
-            S3_GOLD_PREFIX: "gold"
+            # Explicit, non-account parameters. Fill SILVER_INPUT_PATH /
+            # GOLD_OUTPUT_PATH / WHEEL_PATH at deploy time (no /test/ default).
+            # EXPECTED_* are optional (integration/fixture mode only).
+            base_parameters:
+              WHEEL_PATH: "${var.wheel_path}"
+              SILVER_INPUT_PATH: "${var.silver_input_path}"
+              GOLD_OUTPUT_PATH: "${var.gold_output_path}"
+              # EXPECTED_SILVER_FRAMES: "..."   # set only for fixture runs
+              # EXPECTED_GOLD_TRAJECTORIES: "..."
 
           max_retries: 0
           timeout_seconds: 3600
