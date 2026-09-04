@@ -234,6 +234,70 @@ def uc_volume_path(
     return Path(f"/Volumes/{cat}/{sch}/{vol}")
 
 
+# Volumes that must never be dropped by the temp-teardown helper: the wheel
+# artifact volume is durable infrastructure, not per-run scratch space.
+_PROTECTED_VOLUMES = frozenset({"v2_artifacts"})
+
+
+def drop_temp_volume(
+    spark,
+    catalog: str | None = None,
+    schema: str | None = None,
+    volume: str | None = None,
+) -> str:
+    """Drop the temporary UC working volume (``v2_temp``) after a run.
+
+    This is the reusable, packaged form of the teardown that was previously
+    inlined in the serving notebook, so both the Databricks notebook and an
+    Airflow-orchestrated task can call it identically.
+
+    The catalog/schema/volume default from the ``UC_CATALOG`` / ``UC_SCHEMA`` /
+    ``UC_VOLUME`` environment variables (same resolution as
+    :func:`uc_volume_path`), so an Airflow DAG only needs to provide a Spark
+    session; explicit arguments override the environment.
+
+    Parameters
+    ----------
+    spark:
+        Any object exposing a ``.sql(str)`` method — the Databricks notebook
+        ``spark`` session, a Databricks Connect session, or an equivalent
+        SQL-executor the DAG supplies. Required (there is no implicit session
+        outside a notebook).
+    catalog, schema, volume:
+        UC volume coordinates. Default from the environment.
+
+    Returns
+    -------
+    str
+        The fully-qualified name of the dropped volume,
+        e.g. ``"workspace.default.v2_temp"``.
+
+    Raises
+    ------
+    ValueError
+        If ``spark`` is ``None`` or the resolved volume is a protected
+        (durable) volume such as ``v2_artifacts``.
+    """
+    if spark is None:
+        raise ValueError(
+            "drop_temp_volume requires a spark/SQL session; none was provided."
+        )
+    cat = catalog or os.environ.get("UC_CATALOG", _DEFAULT_UC_CATALOG)
+    sch = schema or os.environ.get("UC_SCHEMA", _DEFAULT_UC_SCHEMA)
+    vol = volume or os.environ.get("UC_VOLUME", _DEFAULT_UC_VOLUME)
+
+    if vol in _PROTECTED_VOLUMES:
+        raise ValueError(
+            f"refusing to drop protected volume '{vol}': it is durable "
+            f"infrastructure, not per-run scratch space."
+        )
+
+    fqn = f"{cat}.{sch}.{vol}"
+    spark.sql(f"DROP VOLUME IF EXISTS {fqn}")
+    log.info("dropped temporary volume %s (recreate before next Silver run)", fqn)
+    return fqn
+
+
 def make_run_dir(
     volume_root: Path,
     run_id: str | None = None,
