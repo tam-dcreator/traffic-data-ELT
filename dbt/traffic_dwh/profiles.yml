@@ -36,3 +36,33 @@ traffic_dwh:
       keepalives_idle: 0
       connect_timeout: 10
       search_path: "staging,intermediate,marts,analytics,raw"
+
+    # ── V2 — Neon serving PostgreSQL ──────────────────────────────────────────
+    # Target naming convention: v2_<neon-branch>. This target maps to the Neon
+    # branch selected via NEON_DB_* (currently the `dev` branch → v2_dev). Add
+    # sibling targets (v2_staging, v2_production, ...) pointing at other Neon
+    # branches without changing any model logic — V2 detection uses the `v2_`
+    # prefix via the is_v2_target() macro.
+    #
+    # Credentials come from NEON_DB_* environment variables (never hardcoded).
+    # This target only builds the serving/semantic layer (adapter + marts) on
+    # top of the Spark-produced serving.gold_trajectory_summary table — it does
+    # NOT run staging/intermediate models against Neon.
+    #   sslmode is enforced via NEON_DB_SSLMODE (default: require).
+    v2_dev:
+      type: postgres
+      host: "{{ env_var('NEON_DB_HOST') }}"
+      port: "{{ env_var('NEON_DB_PORT', '5432') | int }}"
+      dbname: "{{ env_var('NEON_DB_NAME') }}"
+      user: "{{ env_var('NEON_DB_USER') }}"
+      password: "{{ env_var('NEON_DB_PASSWORD') }}"
+      sslmode: "{{ env_var('NEON_DB_SSLMODE', 'require') }}"
+      schema: marts
+      threads: 4
+      keepalives_idle: 0
+      connect_timeout: 15
+      # NOTE: no `search_path` here. Neon's pooled endpoint (-pooler host) runs
+      # PgBouncer, which rejects the `search_path` startup parameter dbt would
+      # otherwise send. dbt fully-qualifies every relation by schema, so a
+      # search_path is unnecessary — the serving source is referenced as
+      # serving.gold_trajectory_summary and marts build into the `marts` schema.

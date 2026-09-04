@@ -3,8 +3,15 @@
 from traffic_data_elt.config.settings import (
     AwsConfig,
     IngestionConfig,
+    NeonConfig,
     Settings,
     WarehouseConfig,
 )
 
-__all__ = ["AwsConfig", "IngestionConfig", "Settings", "WarehouseConfig"]
+__all__ = [
+    "AwsConfig",
+    "IngestionConfig",
+    "NeonConfig",
+    "Settings",
+    "WarehouseConfig",
+]

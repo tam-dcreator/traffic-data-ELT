@@ -15,7 +15,7 @@ import datetime
 
 import pytest
 
-from v2_cloud.databricks.gold_transformer import GoldWriteResult
+from traffic_data_elt.databricks.gold_transformer import GoldWriteResult
 
 _NOW = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
 
@@ -48,7 +48,7 @@ class TestBuildTrajectorySummaryGuard:
 
         if "pyspark" in sys.modules:
             pytest.skip("pyspark present (real or stubbed) in this environment")
-        from v2_cloud.databricks.gold_transformer import build_trajectory_summary
+        from traffic_data_elt.databricks.gold_transformer import build_trajectory_summary
 
         with pytest.raises(ModuleNotFoundError):
             build_trajectory_summary(object())

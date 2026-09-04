@@ -95,7 +95,7 @@ def dbutils_copy_fn(dbutils) -> CopyFn:  # noqa: ANN001 - dbutils is untyped
     reads S3 through the Unity Catalog external-location / storage credential,
     so this adapter should be used inside Databricks notebooks::
 
-        from v2_cloud.databricks.bronze_reader import download_and_extract, dbutils_copy_fn
+        from traffic_data_elt.databricks.bronze_reader import download_and_extract, dbutils_copy_fn
         archive = download_and_extract(
             bucket=..., bronze_key=...,
             copy_fn=dbutils_copy_fn(dbutils),

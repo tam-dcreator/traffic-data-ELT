@@ -96,7 +96,7 @@ def build_trajectory_summary(silver_df: "DataFrame") -> "DataFrame":
     from pyspark.sql import Window  # noqa: PLC0415
     from pyspark.sql import functions as F  # noqa: PLC0415
 
-    from v2_cloud.databricks.schemas.gold_schema import (  # noqa: PLC0415
+    from traffic_data_elt.databricks.schemas.gold_schema import (  # noqa: PLC0415
         COORD_ROUND_DP,
         GOLD_FIELD_NAMES,
         KINEMATIC_ROUND_DP,

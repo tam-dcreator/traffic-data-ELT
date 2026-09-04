@@ -57,15 +57,22 @@ pytestmark = pytest.mark.skipif(
 )
 
 # ---------------------------------------------------------------------------
-# V1/V2 parity constants
+# Fixture expectations (from the central integration-fixture manifest)
 # ---------------------------------------------------------------------------
 
-EXPECTED_LOGICAL_VEHICLES = 922
-EXPECTED_FRAME_ROWS = 1_446_887
-EXPECTED_REJECTED = 0
+from tests.fixtures import load_expectations  # noqa: E402
 
-BRONZE_KEY = os.environ.get("BRONZE_KEY", "bronze/pneuma/test/pnemas-sample.zip")
-SILVER_OUTPUT_SUBPATH = "test"
+_EXP = load_expectations()
+EXPECTED_LOGICAL_VEHICLES = int(_EXP["silver"]["logical_vehicles"])
+EXPECTED_FRAME_ROWS = int(_EXP["silver"]["frame_rows"])
+EXPECTED_REJECTED = int(_EXP["silver"]["rejected_records"])
+
+# Bronze test key / Silver test suffix are derived from fixture names + the
+# `test` layer suffix; still overridable via env for ad-hoc runs.
+_SRC_ZIP = _EXP["source"]["bronze_zip_name"]
+_TEST_SUFFIX = _EXP["layer_suffix"]["test"]
+BRONZE_KEY = os.environ.get("BRONZE_KEY", f"bronze/pneuma/{_TEST_SUFFIX}/{_SRC_ZIP}")
+SILVER_OUTPUT_SUBPATH = _TEST_SUFFIX
 
 # ---------------------------------------------------------------------------
 # Integration test
@@ -80,9 +87,9 @@ def test_silver_pipeline_parity():
     from pyspark.sql import SparkSession
 
     from traffic_data_elt.config import AwsConfig
-    from v2_cloud.databricks.bronze_reader import download_and_extract
-    from v2_cloud.databricks.silver_validator import validate_silver
-    from v2_cloud.databricks.silver_writer import write_silver
+    from traffic_data_elt.databricks.bronze_reader import download_and_extract
+    from traffic_data_elt.databricks.silver_validator import validate_silver
+    from traffic_data_elt.databricks.silver_writer import write_silver
 
     aws = AwsConfig.from_env()
 

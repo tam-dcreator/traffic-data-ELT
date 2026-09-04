@@ -79,7 +79,7 @@ def _inject_pyspark_stubs() -> None:
 _inject_pyspark_stubs()
 
 # Now import the module under test (pyspark stubs are in sys.modules)
-from v2_cloud.databricks.silver_validator import (  # noqa: E402
+from traffic_data_elt.databricks.silver_validator import (  # noqa: E402
     SilverValidationResult,
     validate_silver,
 )
@@ -102,7 +102,7 @@ def _make_spark_mock(
 
     The mock models a DataFrame with configurable row counts and null counts.
     """
-    from v2_cloud.databricks.schemas.silver_schema import _FIELD_DEFS, SILVER_FIELD_NAMES
+    from traffic_data_elt.databricks.schemas.silver_schema import _FIELD_DEFS, SILVER_FIELD_NAMES
 
     # Fake StructField-like objects with .name and .dataType attributes.
     class _FakeField:

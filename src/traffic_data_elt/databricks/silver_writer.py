@@ -114,7 +114,7 @@ def write_silver(
     SilverWriteResult
         Metadata capturing counts, path, timing, and status.
     """
-    from v2_cloud.databricks.schemas.silver_schema import get_silver_schema
+    from traffic_data_elt.databricks.schemas.silver_schema import get_silver_schema
     silver_schema = get_silver_schema()
 
     start_time = datetime.datetime.now(tz=datetime.timezone.utc)

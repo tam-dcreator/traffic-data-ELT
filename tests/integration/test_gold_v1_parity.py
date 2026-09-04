@@ -56,14 +56,16 @@ pytestmark = pytest.mark.skipif(
     if _skip_reasons else "",
 )
 
-EXPECTED_TRAJECTORIES = 922
+from tests.fixtures import gold_trajectories  # noqa: E402
+
+EXPECTED_TRAJECTORIES = gold_trajectories()
 
 
 def test_v1_v2_trajectory_summary_parity():
     import psycopg
 
-    from v2_cloud.databricks.gold_parity import compare_trajectory_summaries
-    from v2_cloud.databricks.schemas.gold_schema import GOLD_FIELD_NAMES
+    from traffic_data_elt.databricks.gold_parity import compare_trajectory_summaries
+    from traffic_data_elt.databricks.schemas.gold_schema import GOLD_FIELD_NAMES
 
     # ── V1 reference from Postgres ──────────────────────────────────────────
     cols = ", ".join(GOLD_FIELD_NAMES)

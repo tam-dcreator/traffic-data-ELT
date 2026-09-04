@@ -26,7 +26,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from v2_cloud.databricks.schemas.gold_schema import (
+from traffic_data_elt.databricks.schemas.gold_schema import (
     FLOAT_TOLERANCE,
     GOLD_EXACT_FIELDS,
     GOLD_FIELD_NAMES,

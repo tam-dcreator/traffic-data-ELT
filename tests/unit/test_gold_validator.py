@@ -62,7 +62,7 @@ def _inject_pyspark_stubs() -> None:
 
 _inject_pyspark_stubs()
 
-from v2_cloud.databricks.gold_validator import (  # noqa: E402
+from traffic_data_elt.databricks.gold_validator import (  # noqa: E402
     GoldValidationResult,
     validate_gold,
 )
@@ -84,7 +84,7 @@ def _make_spark_mock(
     bad_speed: int = 0,
     empty_source: int = 0,
 ):
-    from v2_cloud.databricks.schemas.gold_schema import _FIELD_DEFS
+    from traffic_data_elt.databricks.schemas.gold_schema import _FIELD_DEFS
 
     class _FakeField:
         def __init__(self, name, type_name, nullable):

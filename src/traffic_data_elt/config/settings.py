@@ -126,7 +126,7 @@ class AwsConfig:
             if dotenv_path is not None:
                 load_dotenv(dotenv_path, override=False)
         except ImportError:
-            print("Python-dotenv not installed,using on system env variables")
+            print("Python-dotenv not installed,using system env variables")
             pass  # python-dotenv not installed; rely on ambient environment
 
         return cls(
@@ -209,6 +209,93 @@ class AwsConfig:
         if not segments:
             raise ValueError("key requires at least one non-empty segment")
         return "/".join(segments)
+
+
+@dataclass(frozen=True)
+class NeonConfig:
+    """Connection details for the Neon serving PostgreSQL database (V2).
+
+    This is the **data-plane** connection (psycopg / dbt / the Databricks
+    loader).  It is deliberately separate from ``NEON_API_KEY`` — the Neon
+    control-plane API key used by the ``neon`` CLI for project/branch/endpoint
+    operations.  The API key must never be used as a PostgreSQL password.
+
+    Only non-secret fields are exposed via :pyattr:`dsn`; the password is never
+    included in string representations, DSNs, or logs.  Retrieve values with
+    :meth:`conninfo` (a kwargs dict for ``psycopg.connect``) when a connection
+    is actually needed.
+    """
+
+    host: str
+    port: int
+    database: str
+    user: str
+    password: str
+    sslmode: str = "require"
+
+    @classmethod
+    def from_env(cls, dotenv_path: str = "v2_cloud/.env") -> "NeonConfig":
+        """Build NeonConfig from the environment (loads ``v2_cloud/.env``).
+
+        Required:
+            NEON_DB_HOST
+            NEON_DB_NAME
+            NEON_DB_USER
+            NEON_DB_PASSWORD
+
+        Optional (with defaults):
+            NEON_DB_PORT      (default: 5432)
+            NEON_DB_SSLMODE   (default: require)
+
+        Shell-exported values take precedence over the dotenv file
+        (``override=False``), matching :meth:`AwsConfig.from_env`.
+        """
+        try:
+            from dotenv import load_dotenv
+
+            if dotenv_path is not None:
+                load_dotenv(dotenv_path, override=False)
+        except ImportError:
+            print("Python-dotenv not installed,using system env variables")
+            pass  # python-dotenv not installed; rely on ambient environment
+
+        return cls(
+            host=_require("NEON_DB_HOST"),
+            port=int(_optional("NEON_DB_PORT", "5432")),
+            database=_require("NEON_DB_NAME"),
+            user=_require("NEON_DB_USER"),
+            password=_require("NEON_DB_PASSWORD"),
+            sslmode=_optional("NEON_DB_SSLMODE", "require"),
+        )
+
+    @property
+    def dsn(self) -> str:
+        """psycopg-style DSN **without** the password (safe to log)."""
+        return (
+            f"host={self.host} port={self.port} dbname={self.database} "
+            f"user={self.user} sslmode={self.sslmode}"
+        )
+
+    def conninfo(self) -> dict:
+        """Return kwargs for ``psycopg.connect`` (includes the password).
+
+        The returned dict contains the secret — never log or print it.
+        """
+        return {
+            "host": self.host,
+            "port": self.port,
+            "dbname": self.database,
+            "user": self.user,
+            "password": self.password,
+            "sslmode": self.sslmode,
+        }
+
+    def __repr__(self) -> str:  # never leak the password in reprs / tracebacks
+        return (
+            f"NeonConfig(host={self.host!r}, port={self.port!r}, "
+            f"database={self.database!r}, user={self.user!r}, "
+            f"sslmode={self.sslmode!r}, password=<redacted>)"
+        )
 
 
 @dataclass(frozen=True)

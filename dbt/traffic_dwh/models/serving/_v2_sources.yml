@@ -1,0 +1,41 @@
+version: 2
+
+sources:
+  # ── V2 serving source (Neon) ──────────────────────────────────────────────
+  # Physical trajectory-level table written by the Spark Gold → Neon loader
+  # (v2_cloud/databricks/neon_loader.py).  This is the V2 dbt entry point:
+  # V2 marts read from here instead of re-deriving trajectory summaries.
+  #
+  # This source only exists on the Neon `v2` target.  On the V1 target the
+  # semantic adapter falls back to ref('int_vehicle_trajectory_summary'), so
+  # this source is never queried under V1.
+  - name: v2_serving
+    description: >
+      V2 serving layer produced by Spark Gold and loaded into Neon.
+      Compact trajectory-level relational data — the physical handoff from
+      Spark to the dbt semantic marts.
+    schema: serving
+
+    tables:
+      - name: gold_trajectory_summary
+        description: >
+          One row per vehicle trajectory (source_file, track_id).
+          Spark implementation of the V1 int_vehicle_trajectory_summary
+          semantics; see v2_cloud/databricks/GOLD_CONTRACT.md.
+        columns:
+          - name: source_file
+            description: Originating CSV file basename.
+            tests:
+              - not_null
+          - name: track_id
+            description: Vehicle identifier within the source file.
+            tests:
+              - not_null
+          - name: vehicle_type
+            description: Lowercased vehicle class label.
+            tests:
+              - not_null
+          - name: frame_count
+            description: Number of frame observations for this trajectory.
+            tests:
+              - not_null

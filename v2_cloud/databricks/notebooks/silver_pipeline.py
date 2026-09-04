@@ -16,43 +16,33 @@
 # MAGIC     ↓  cleanup — delete run dir from UC volume
 # MAGIC ```
 # MAGIC
-# MAGIC **V1/V2 parity target (representative sample):**
-# MAGIC - Logical vehicles: 922
-# MAGIC - Silver frame rows: 1,446,887
-# MAGIC - Rejected logical records: 0
+# MAGIC **Validation modes:**
+# MAGIC - production: invariants only (row_count > 0, schema, coordinates, ...)
+# MAGIC - fixture/integration: pass `EXPECTED_FRAME_ROWS` to additionally assert
+# MAGIC   the known sample counts (e.g. the pNEUMA sample fixture in
+# MAGIC   `tests/fixtures/pneuma_sample_expectations.toml`).
 
 # COMMAND ----------
-# MAGIC %md ## 0. Package installation
+# MAGIC %md ## 0. Install the versioned wheel
 # MAGIC
-# MAGIC The shared `traffic-data-elt` package must be installed before running
-# MAGIC this notebook.  Use one of the methods below depending on your workflow:
-# MAGIC
-# MAGIC ### Method A — Databricks Repos (recommended for active development)
-# MAGIC Attach the `traffic_data_ELT` repository via Databricks Repos, then:
-# MAGIC ```python
-# MAGIC %pip install -e /Workspace/Repos/<your-email>/traffic_data_ELT
-# MAGIC ```
-# MAGIC
-# MAGIC ### Method B — Wheel from UC volume (used below)
-# MAGIC Build the wheel locally and upload to the UC volume:
-# MAGIC ```bash
-# MAGIC pip wheel . -w dist/ --no-deps
-# MAGIC # upload dist/traffic_data_elt-0.1.0-py3-none-any.whl to
-# MAGIC # /Volumes/workspace/default/v2_temp/wheels/ via the Databricks SDK/CLI
-# MAGIC ```
+# MAGIC Install the deployed `traffic-data-elt` wheel (see
+# MAGIC `scripts/deploy_databricks_artifact.py`). `WHEEL_PATH` is a job parameter.
 # MAGIC
 # MAGIC ### `--no-deps` rationale
 # MAGIC The Silver runtime path (`PneumaExtractor` + logging) uses only the
 # MAGIC Python standard library.  pandas / boto3 are already present on the
 # MAGIC serverless runtime.  Installing with `--no-deps` avoids re-resolving
-# MAGIC (and possibly downgrading) the runtime's pre-installed packages, which
-# MAGIC is both faster and avoids Python-version conflicts.
+# MAGIC (and possibly downgrading) the runtime's pre-installed packages.
 
 # COMMAND ----------
 
-# Install the shared package WITHOUT dependencies — the Silver code path is
-# pure stdlib and the serverless runtime already provides pandas/boto3.
-%pip install --no-deps /Volumes/workspace/default/v2_temp/wheels/traffic_data_elt-0.1.0-py3-none-any.whl
+# Install the deployed, versioned wheel WITHOUT dependencies — the Silver code
+# path is pure stdlib and the serverless runtime already provides pandas/boto3.
+# WHEEL_PATH is a job parameter (see scripts/deploy_databricks_artifact.py).
+dbutils.widgets.text("WHEEL_PATH", "")
+_wheel = dbutils.widgets.get("WHEEL_PATH") or \
+    "/Volumes/workspace/default/v2_artifacts/wheels/traffic_data_elt-latest-py3-none-any.whl"
+%pip install --no-deps {_wheel}
 
 # COMMAND ----------
 
@@ -73,18 +63,12 @@ dbutils.library.restartPython()
 # COMMAND ----------
 
 import os
-import sys
 import uuid
 
-# ── Make the v2_cloud Databricks modules importable ───────────────────────────
-# The shared `traffic_data_elt` package is installed via the wheel (Cell 0).
-# The Databricks-specific modules under `v2_cloud/databricks/` are NOT part of
-# that wheel (they live outside src/).  They are synced to the UC volume and
-# added to sys.path here so `from v2_cloud.databricks... import ...` resolves.
-# Namespace-package resolution handles the missing __init__.py files.
-_V2_CODE_ROOT = "/Volumes/workspace/default/v2_temp/code"
-if _V2_CODE_ROOT not in sys.path:
-    sys.path.insert(0, _V2_CODE_ROOT)
+# Runtime modules are imported from the installed `traffic_data_elt` wheel
+# (traffic_data_elt.databricks.*). No UC-volume source sync / sys.path shim.
+# S3 access uses the Unity Catalog external-location credential (no boto3
+# creds, no AWS_REGION needed on this compute).
 
 
 def _cfg(name: str, default: str = "") -> str:
@@ -103,25 +87,17 @@ def _cfg(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
 
 
-# ── AWS / S3 ──────────────────────────────────────────────────────────────────
-# For production, prefer Databricks Secrets:
-#   s3_bucket = dbutils.secrets.get(scope="v2-config", key="s3-bucket")
-aws_region = _cfg("AWS_REGION", "us-east-1")
-s3_bucket  = _cfg("S3_BUCKET", "")
+# ── S3 bucket (required; provided as a job parameter) ─────────────────────────
+s3_bucket = _cfg("S3_BUCKET", "")
+assert s3_bucket, "S3_BUCKET must be provided as a job parameter (no default)."
 
-assert s3_bucket, (
-    "S3_BUCKET must be set — use Databricks Secrets or cluster environment variables. "
-    "Never hardcode credentials here."
-)
+# ── Bronze source (REQUIRED, explicit — no /test/ default) ────────────────────
+bronze_key = _cfg("BRONZE_KEY", "")
+assert bronze_key, "BRONZE_KEY is required (S3 object key of the Bronze ZIP)."
 
-# ── Bronze source ─────────────────────────────────────────────────────────────
-# The test ZIP is already present at this key — do NOT re-upload.
-bronze_key = _cfg("BRONZE_KEY", "bronze/pneuma/test/pnemas-sample.zip")
-
-# ── Silver output ─────────────────────────────────────────────────────────────
-silver_prefix     = _cfg("S3_SILVER_PREFIX", "silver")
-silver_output_key = f"{silver_prefix}/pneuma/trajectories/test/"
-silver_s3_path    = f"s3://{s3_bucket}/{silver_output_key}"
+# ── Silver output (REQUIRED, explicit — no /test/ default) ────────────────────
+silver_s3_path = _cfg("SILVER_OUTPUT_PATH", "")
+assert silver_s3_path, "SILVER_OUTPUT_PATH is required (full s3:// path)."
 
 # ── Unity Catalog managed volume (temporary working storage) ─────────────────
 uc_catalog = _cfg("UC_CATALOG", "workspace")
@@ -134,12 +110,15 @@ run_id = str(uuid.uuid4())[:8]  # short UUID for readability in logs
 # Derived volume base path.
 volume_base_path = f"/Volumes/{uc_catalog}/{uc_schema}/{uc_volume}"
 
-# ── Parity acceptance gate ────────────────────────────────────────────────────
-# Exact expected result from V1 on the same pNEUMA sample.
-# The Silver milestone is NOT complete if this does not match.
-EXPECTED_FRAME_ROWS = 1_446_887
+# ── Fixture-vs-production validation ──────────────────────────────────────────
+# In integration/fixture mode the caller passes EXPECTED_FRAME_ROWS; in
+# production it is omitted and only invariants (row_count > 0, schema, ...) hold.
+_exp_frames = _cfg("EXPECTED_FRAME_ROWS", "")
+expected_frame_rows = int(_exp_frames) if _exp_frames else None
+fixture_mode = expected_frame_rows is not None
 
 print(f"run_id:          {run_id}")
+print(f"validation:      {'fixture' if fixture_mode else 'production (invariants only)'}")
 print(f"bronze_key:      {bronze_key}")
 print(f"silver_s3_path:  {silver_s3_path}")
 print(f"uc_volume:       {volume_base_path}")
@@ -149,7 +128,7 @@ print(f"uc_volume:       {volume_base_path}")
 
 # COMMAND ----------
 
-from v2_cloud.databricks.bronze_reader import download_and_extract, dbutils_copy_fn
+from traffic_data_elt.databricks.bronze_reader import download_and_extract, dbutils_copy_fn
 
 # On serverless compute boto3 has no credentials.  Use dbutils.fs, which reads
 # S3 through the Unity Catalog external-location credential for this bucket.
@@ -172,7 +151,7 @@ print(f"CSV size (bytes):    {archive.extracted_csv_path.stat().st_size:,}")
 
 # COMMAND ----------
 
-from v2_cloud.databricks.silver_writer import write_silver
+from traffic_data_elt.databricks.silver_writer import write_silver
 
 result = write_silver(
     spark=spark,
@@ -197,20 +176,24 @@ if result.status != "success":
         f"Temporary files retained for diagnosis at: {archive.run_dir}"
     )
 
-# ── V1/V2 parity pre-check ────────────────────────────────────────────────────
-if result.frame_row_count != EXPECTED_FRAME_ROWS:
+# ── Invariant: parser must produce rows ───────────────────────────────────────
+if result.frame_row_count <= 0:
     raise RuntimeError(
-        f"PARITY FAILURE before validation: "
-        f"expected {EXPECTED_FRAME_ROWS:,} frame rows, "
-        f"got {result.frame_row_count:,} "
-        f"(delta: {result.frame_row_count - EXPECTED_FRAME_ROWS:+,}).\n"
-        f"Diagnose: ZIP member integrity, encoding, newline handling, "
-        f"parser invocation.\n"
-        f"Temporary files retained: {archive.run_dir}\n"
-        f"Do NOT proceed to Gold until parity is proven."
+        f"Silver produced 0 frame rows — STOP.\n"
+        f"Temporary files retained: {archive.run_dir}"
     )
 
-print("✓ V1/V2 parity pre-check passed")
+# ── Fixture parity pre-check (integration mode only) ──────────────────────────
+if fixture_mode and result.frame_row_count != expected_frame_rows:
+    raise RuntimeError(
+        f"FIXTURE PARITY FAILURE: expected {expected_frame_rows:,} frame rows, "
+        f"got {result.frame_row_count:,} "
+        f"(delta: {result.frame_row_count - expected_frame_rows:+,}).\n"
+        f"Diagnose: ZIP member integrity, encoding, newline handling, "
+        f"parser invocation. Temporary files retained: {archive.run_dir}"
+    )
+
+print("✓ Silver row-count checks passed")
 
 # COMMAND ----------
 # MAGIC %md ## 4. Validate Silver output (strict)
@@ -220,12 +203,13 @@ print("✓ V1/V2 parity pre-check passed")
 
 # COMMAND ----------
 
-from v2_cloud.databricks.silver_validator import validate_silver
+from traffic_data_elt.databricks.silver_validator import validate_silver
 
+# expected_row_count is None in production → validator enforces invariants only.
 validation = validate_silver(
     spark=spark,
     silver_path=silver_s3_path,
-    expected_row_count=EXPECTED_FRAME_ROWS,
+    expected_row_count=expected_frame_rows,
 )
 
 print(validation.summary())
