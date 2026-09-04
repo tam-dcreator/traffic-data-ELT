@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from v2_cloud.databricks.schemas.gold_schema import (
+from traffic_data_elt.databricks.schemas.gold_schema import (
     COORD_ROUND_DP,
     FLOAT_TOLERANCE,
     GOLD_EXACT_FIELDS,
@@ -115,7 +115,7 @@ class TestLazySchemaImportGuard:
 
         if "pyspark" in sys.modules:
             pytest.skip("pyspark present (real or stubbed) in this environment")
-        from v2_cloud.databricks.schemas.gold_schema import get_gold_schema
+        from traffic_data_elt.databricks.schemas.gold_schema import get_gold_schema
 
         with pytest.raises(ModuleNotFoundError):
             get_gold_schema()

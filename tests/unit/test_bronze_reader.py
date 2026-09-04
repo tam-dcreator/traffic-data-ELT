@@ -24,7 +24,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from v2_cloud.databricks.bronze_reader import (
+from traffic_data_elt.databricks.bronze_reader import (
     BronzeArchive,
     BronzeReaderError,
     _select_csv_members,
@@ -397,7 +397,7 @@ class TestListBronzeZipMembers:
 class TestDbutilsCopyFn:
     def test_volume_path_used_without_file_scheme(self):
         """UC volume paths must NOT get a file: prefix (blocked on serverless)."""
-        from v2_cloud.databricks.bronze_reader import dbutils_copy_fn
+        from traffic_data_elt.databricks.bronze_reader import dbutils_copy_fn
 
         mock_dbutils = MagicMock()
         copy = dbutils_copy_fn(mock_dbutils)
@@ -409,7 +409,7 @@ class TestDbutilsCopyFn:
         )
 
     def test_preserves_existing_file_scheme(self):
-        from v2_cloud.databricks.bronze_reader import dbutils_copy_fn
+        from traffic_data_elt.databricks.bronze_reader import dbutils_copy_fn
 
         mock_dbutils = MagicMock()
         copy = dbutils_copy_fn(mock_dbutils)
@@ -420,7 +420,7 @@ class TestDbutilsCopyFn:
         )
 
     def test_non_volume_local_path_gets_file_scheme(self):
-        from v2_cloud.databricks.bronze_reader import dbutils_copy_fn
+        from traffic_data_elt.databricks.bronze_reader import dbutils_copy_fn
 
         mock_dbutils = MagicMock()
         copy = dbutils_copy_fn(mock_dbutils)

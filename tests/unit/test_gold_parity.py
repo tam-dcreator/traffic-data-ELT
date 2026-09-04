@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from v2_cloud.databricks.gold_parity import (
+from traffic_data_elt.databricks.gold_parity import (
     compare_trajectory_summaries,
     index_rows,
 )

@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from traffic_data_elt.extract.pneuma import PneumaRecord
-from v2_cloud.databricks.silver_writer import (
+from traffic_data_elt.databricks.silver_writer import (
     _parse_csv,
     _records_to_rows_batched,
 )
@@ -84,7 +84,7 @@ class TestRecordsToRowsBatched:
         assert len(row) == 13
 
     def test_field_order_matches_silver_schema(self):
-        from v2_cloud.databricks.schemas.silver_schema import SILVER_FIELD_NAMES
+        from traffic_data_elt.databricks.schemas.silver_schema import SILVER_FIELD_NAMES
 
         record = _make_record()
         rows = list(_records_to_rows_batched(

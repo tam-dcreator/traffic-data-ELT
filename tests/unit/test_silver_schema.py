@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from v2_cloud.databricks.schemas.silver_schema import (
+from traffic_data_elt.databricks.schemas.silver_schema import (
     LAT_MAX,
     LAT_MIN,
     LON_MAX,
