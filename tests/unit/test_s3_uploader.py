@@ -29,7 +29,13 @@ from traffic_data_elt.load.s3_uploader import (
 
 
 def _cfg() -> AwsConfig:
-    return AwsConfig(region="eu-central-1", bucket="test-bucket", bronze_prefix="bronze")
+    # Layer-only prefix (empty data prefix) keeps these upload-mechanics tests
+    # focused on transfer behaviour rather than dataset-prefix policy: keys
+    # resolve as "bronze/<parts>".
+    return AwsConfig(
+        region="eu-central-1", bucket="test-bucket",
+        bronze_layer_prefix="bronze", bronze_data_prefix="",
+    )
 
 
 def _client_error(op: str = "UploadPart") -> ClientError:

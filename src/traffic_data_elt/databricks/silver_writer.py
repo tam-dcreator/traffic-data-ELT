@@ -99,7 +99,7 @@ def write_silver(
         S3 Bronze object key — stamped onto every Silver row for traceability.
     silver_s3_path:
         Full S3 path for Silver Parquet output, e.g.
-        ``s3://mybucket/silver/pneuma/trajectories/test/``.
+        ``s3://mybucket/silver/pneuma/trajectories``.
     run_id:
         Optional run identifier for observability (stamped on result).
     row_limit:

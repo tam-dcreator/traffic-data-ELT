@@ -19,13 +19,19 @@ Usage
 
     # Optional overrides:
     export SMOKE_TEST_URL=https://example.com/small-file.txt
-    export S3_BRONZE_PREFIX=bronze
+    export S3_BRONZE_LAYER_PREFIX=bronze
+    export S3_BRONZE_DATA_PREFIX=pneuma
 
     python scripts/v2_bronze_smoke_test.py
 
+This is an opt-in DIAGNOSTIC tool, not part of the production runtime. It
+uploads under a clearly-labelled ``test`` sub-path so it never collides with
+the production Bronze object.
+
 The script:
   1. Streams the source URL without staging it fully on disk.
-  2. Uploads it to ``bronze/test/<filename>`` in the configured bucket.
+  2. Uploads it to ``<bronze-layer>/<bronze-data>/test/<filename>`` (e.g.
+     ``bronze/pneuma/test/<filename>``) in the configured bucket.
   3. Verifies via HEAD that the object exists and has non-zero size.
 
 It exits non-zero on any failure.  It does not download the object back.

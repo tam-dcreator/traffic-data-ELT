@@ -187,23 +187,26 @@ class TestSilverKey:
     @pytest.fixture
     def cfg(self):
         from traffic_data_elt.config import AwsConfig
-        return AwsConfig(region="eu-central-1", bucket="b", silver_prefix="silver")
-
-    def test_simple_silver_key(self, cfg):
-        assert cfg.silver_key("pneuma", "trajectories", "test") == (
-            "silver/pneuma/trajectories/test"
+        return AwsConfig(
+            region="eu-central-1", bucket="b",
+            silver_layer_prefix="silver", silver_data_prefix="pneuma/trajectories",
         )
 
-    def test_normalises_slashes(self, cfg):
-        assert cfg.silver_key("pneuma/", "/test/") == "silver/pneuma/test"
+    def test_simple_silver_key(self, cfg):
+        assert cfg.silver_key("part.parquet") == (
+            "silver/pneuma/trajectories/part.parquet"
+        )
 
-    def test_custom_prefix(self):
-        from traffic_data_elt.config import AwsConfig
-        cfg = AwsConfig(region="r", bucket="b", silver_prefix="lake/silver")
-        assert cfg.silver_key("a.parquet") == "lake/silver/a.parquet"
+    def test_no_parts_returns_layer_and_data(self, cfg):
+        assert cfg.silver_key() == "silver/pneuma/trajectories"
+
+    def test_normalises_slashes(self, cfg):
+        assert cfg.silver_key("sub/", "/x/") == "silver/pneuma/trajectories/sub/x"
 
     def test_empty_raises(self):
         from traffic_data_elt.config import AwsConfig
-        cfg = AwsConfig(region="r", bucket="b", silver_prefix="")
+        cfg = AwsConfig(
+            region="r", bucket="b", silver_layer_prefix="", silver_data_prefix="",
+        )
         with pytest.raises(ValueError):
             cfg.silver_key("")

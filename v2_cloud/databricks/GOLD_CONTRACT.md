@@ -162,14 +162,19 @@ genuine semantic error cannot hide beneath it.
 
 ## 8. Physical output
 
+Production:
+
 ```
-s3://<bucket>/gold/pneuma/trajectory_summary/test/
+s3://<bucket>/gold/pneuma/trajectory_summary/
 ```
 
+(A fixture/integration run may use a clearly-labelled `.../trajectory_summary/test/`
+sub-path; production runtime never does — the path is an explicit job parameter
+with no `/test/` default.)
+
 - Format: Parquet, Snappy compression.
-- Write mode: `overwrite` (idempotent for this fixture — reruns replace, never
-  append).
-- No partitioning (922 rows). No `track_id` partitioning. No forced 256 MB
+- Write mode: `overwrite` (idempotent — reruns replace, never append).
+- No `track_id` partitioning. No forced 256 MB
   object target for this sample; small files are expected.
 
 Production implication (deferred): partitioned Gold across many source files
