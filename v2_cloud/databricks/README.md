@@ -29,14 +29,14 @@ responsibility after Gold-derived data reaches Neon in a later milestone.
 
 ```
 S3 Bronze
-└── bronze/pneuma/test/pnemas-sample.zip   ← immutable compressed source
+└── bronze/pneuma/pNEUMA_dataset.zip       ← immutable compressed source
         │
         │  download_and_extract()
         ▼
 UC Managed Volume (temporary only)
 /Volumes/<catalog>/<schema>/v2_temp/runs/<run_id>/
-├── source/pnemas-sample.zip               ← temporary copy
-└── extracted/pnemas.csv                   ← temporary extracted CSV
+├── source/pNEUMA_dataset.zip              ← temporary copy
+└── extracted/*.csv                        ← temporary extracted CSV(s)
         │
         │  PneumaExtractor.extract_from_lines(...)
         ▼
@@ -45,7 +45,7 @@ Spark DataFrame  (explicit Silver schema)
         │  write_silver()
         ▼
 S3 Silver
-└── silver/pneuma/trajectories/test/       ← normalised Parquet (persistent)
+└── silver/pneuma/trajectories/            ← normalised Parquet (persistent)
         │
         │  validate_silver()  — strict on real Spark
         ▼
@@ -309,9 +309,13 @@ Non-secret values:
 |---|---|---|
 | `AWS_REGION` | `eu-central-1` | S3 bucket region |
 | `S3_BUCKET` | — | S3 bucket name (required) |
-| `S3_BRONZE_PREFIX` | `bronze` | S3 Bronze key prefix |
-| `S3_SILVER_PREFIX` | `silver` | S3 Silver key prefix |
-| `S3_GOLD_PREFIX` | `gold` | S3 Gold key prefix |
+| `ZENODO_URL` | — | Full source-archive URL (Bronze ingestion); Bronze object name derived from URL path only |
+| `S3_BRONZE_LAYER_PREFIX` | `bronze` | Bronze medallion layer prefix |
+| `S3_SILVER_LAYER_PREFIX` | `silver` | Silver medallion layer prefix |
+| `S3_GOLD_LAYER_PREFIX` | `gold` | Gold medallion layer prefix |
+| `S3_BRONZE_DATA_PREFIX` | `pneuma` | Bronze dataset data prefix |
+| `S3_SILVER_DATA_PREFIX` | `pneuma/trajectories` | Silver dataset data prefix |
+| `S3_GOLD_DATA_PREFIX` | `pneuma/trajectory_summary` | Gold dataset data prefix |
 | `UC_CATALOG` | `workspace` | Unity Catalog catalog name |
 | `UC_SCHEMA` | `default` | Unity Catalog schema name |
 | `UC_VOLUME` | `v2_temp` | Unity Catalog volume name |
@@ -425,7 +429,7 @@ float tolerance) is in `GOLD_CONTRACT.md`.
 S3 Silver frame Parquet
     ↓  spark.read.parquet  (UC external location — no boto3, no AWS keys)
     ↓  build_trajectory_summary(...)   — native Spark aggregations only
-    ↓  S3 Gold Parquet  (gold/pneuma/trajectory_summary/test/)
+    ↓  S3 Gold Parquet  (gold/pneuma/trajectory_summary/)
     ↓  read-back
     ↓  validate_gold(...)  — strict on real Spark
 ```

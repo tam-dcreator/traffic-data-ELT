@@ -60,28 +60,30 @@ class TestGoldKey:
     @pytest.fixture
     def cfg(self):
         from traffic_data_elt.config import AwsConfig
-        return AwsConfig(region="eu-central-1", bucket="b", gold_prefix="gold")
-
-    def test_simple_gold_key(self, cfg):
-        assert cfg.gold_key("pneuma", "trajectory_summary", "test") == (
-            "gold/pneuma/trajectory_summary/test"
+        return AwsConfig(
+            region="eu-central-1", bucket="b",
+            gold_layer_prefix="gold", gold_data_prefix="pneuma/trajectory_summary",
         )
 
-    def test_normalises_slashes(self, cfg):
-        assert cfg.gold_key("pneuma/", "/test/") == "gold/pneuma/test"
+    def test_simple_gold_key(self, cfg):
+        assert cfg.gold_key("part.parquet") == (
+            "gold/pneuma/trajectory_summary/part.parquet"
+        )
 
-    def test_custom_prefix(self):
-        from traffic_data_elt.config import AwsConfig
-        cfg = AwsConfig(region="r", bucket="b", gold_prefix="lake/gold")
-        assert cfg.gold_key("a.parquet") == "lake/gold/a.parquet"
+    def test_no_parts_returns_layer_and_data(self, cfg):
+        assert cfg.gold_key() == "gold/pneuma/trajectory_summary"
+
+    def test_normalises_slashes(self, cfg):
+        assert cfg.gold_key("sub/", "/x/") == "gold/pneuma/trajectory_summary/sub/x"
 
     def test_empty_raises(self):
         from traffic_data_elt.config import AwsConfig
-        cfg = AwsConfig(region="r", bucket="b", gold_prefix="")
+        cfg = AwsConfig(region="r", bucket="b", gold_layer_prefix="", gold_data_prefix="")
         with pytest.raises(ValueError):
             cfg.gold_key("")
 
-    def test_default_gold_prefix_is_gold(self):
+    def test_default_gold_prefixes(self):
         from traffic_data_elt.config import AwsConfig
         cfg = AwsConfig(region="r", bucket="b")
-        assert cfg.gold_prefix == "gold"
+        assert cfg.gold_layer_prefix == "gold"
+        assert cfg.gold_data_prefix == "pneuma/trajectory_summary"

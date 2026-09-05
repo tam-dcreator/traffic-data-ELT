@@ -226,10 +226,10 @@ def write_gold(
         Active SparkSession.
     silver_s3_path:
         Full S3 path to the Silver Parquet directory
-        (e.g. ``s3://bucket/silver/pneuma/trajectories/test/``).
+        (e.g. ``s3://bucket/silver/pneuma/trajectories``).
     gold_s3_path:
         Full S3 path for Gold Parquet output
-        (e.g. ``s3://bucket/gold/pneuma/trajectory_summary/test/``).
+        (e.g. ``s3://bucket/gold/pneuma/trajectory_summary``).
     run_id:
         Optional run identifier for observability.
     coalesce_partitions:

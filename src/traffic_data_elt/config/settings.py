@@ -90,9 +90,18 @@ class AwsConfig:
 
     region: str
     bucket: str
-    bronze_prefix: str = "bronze"
-    silver_prefix: str = "silver"
-    gold_prefix: str = "gold"
+    # Medallion LAYER prefixes (top-level bucket partitions).
+    bronze_layer_prefix: str = "bronze"
+    silver_layer_prefix: str = "silver"
+    gold_layer_prefix: str = "gold"
+    # DATASET DATA prefixes (dataset path within each layer).
+    bronze_data_prefix: str = "pneuma"
+    silver_data_prefix: str = "pneuma/trajectories"
+    gold_data_prefix: str = "pneuma/trajectory_summary"
+    # Full source-archive URL (Zenodo). Empty unless configured; the Bronze
+    # ingestion path requires it, but constructing AwsConfig for Silver/Gold
+    # path composition does not.
+    zenodo_url: str = ""
     multipart_chunk_bytes: int = _DEFAULT_MULTIPART_CHUNK_BYTES
     multipart_threshold_bytes: int = _DEFAULT_MULTIPART_THRESHOLD_BYTES
     http_chunk_bytes: int = _DEFAULT_HTTP_CHUNK_BYTES
@@ -108,17 +117,31 @@ class AwsConfig:
         ``python-dotenv`` is optional; if it is not installed the method falls
         back silently to the ambient environment.
 
+        Environment contract (unambiguous LAYER + DATA prefixes)
+        --------------------------------------------------------
         Required:
-            AWS_REGION            e.g. eu-central-1
+            AWS_REGION            e.g. us-east-2
             S3_BUCKET             existing bucket name (never created here)
 
-        Optional:
-            S3_BRONZE_PREFIX               (default: bronze)
-            S3_SILVER_PREFIX               (default: silver)
-            S3_GOLD_PREFIX                 (default: gold)
+        Optional (medallion LAYER prefixes — top-level bucket partitions):
+            S3_BRONZE_LAYER_PREFIX         (default: bronze)
+            S3_SILVER_LAYER_PREFIX         (default: silver)
+            S3_GOLD_LAYER_PREFIX           (default: gold)
+
+        Optional (DATASET DATA prefixes — dataset path within each layer):
+            S3_BRONZE_DATA_PREFIX          (default: pneuma)
+            S3_SILVER_DATA_PREFIX          (default: pneuma/trajectories)
+            S3_GOLD_DATA_PREFIX            (default: pneuma/trajectory_summary)
+
+        Optional (ingestion + transfer tuning):
+            ZENODO_URL                     (default: "")
             S3_MULTIPART_CHUNK_BYTES       (default: 8 MiB)
             S3_MULTIPART_THRESHOLD_BYTES   (default: 8 MiB)
             HTTP_STREAM_CHUNK_BYTES        (default: 1 MiB)
+
+        This is the single, unambiguous prefix contract — the earlier flat
+        ``S3_BRONZE_PREFIX`` / ``S3_SILVER_PREFIX`` / ``S3_GOLD_PREFIX`` names
+        have been removed to avoid two competing conventions.
         """
         try:
             from dotenv import load_dotenv
@@ -132,9 +155,17 @@ class AwsConfig:
         return cls(
             region=_require("AWS_REGION"),
             bucket=_require("S3_BUCKET"),
-            bronze_prefix=_optional("S3_BRONZE_PREFIX", "bronze"),
-            silver_prefix=_optional("S3_SILVER_PREFIX", "silver"),
-            gold_prefix=_optional("S3_GOLD_PREFIX", "gold"),
+            bronze_layer_prefix=_optional("S3_BRONZE_LAYER_PREFIX", "bronze"),
+            silver_layer_prefix=_optional("S3_SILVER_LAYER_PREFIX", "silver"),
+            gold_layer_prefix=_optional("S3_GOLD_LAYER_PREFIX", "gold"),
+            bronze_data_prefix=_optional("S3_BRONZE_DATA_PREFIX", "pneuma"),
+            silver_data_prefix=_optional(
+                "S3_SILVER_DATA_PREFIX", "pneuma/trajectories"
+            ),
+            gold_data_prefix=_optional(
+                "S3_GOLD_DATA_PREFIX", "pneuma/trajectory_summary"
+            ),
+            zenodo_url=_optional("ZENODO_URL", ""),
             multipart_chunk_bytes=int(
                 _optional(
                     "S3_MULTIPART_CHUNK_BYTES", str(_DEFAULT_MULTIPART_CHUNK_BYTES)
@@ -151,58 +182,60 @@ class AwsConfig:
             ),
         )
 
+    # ── S3 object keys (LAYER + DATA + extra parts) ───────────────────────────
     def bronze_key(self, *parts: str) -> str:
-        """Construct an S3 object key under the Bronze prefix.
+        """Construct an S3 object key under ``<bronze_layer>/<bronze_data>``.
 
-        Joins the configured ``bronze_prefix`` with the supplied path parts,
-        normalising slashes so the result never contains empty or doubled
-        segments.
-
-        Example
-        -------
-        ``AwsConfig(..., bronze_prefix="bronze").bronze_key("test", "sample.csv")``
-        returns ``"bronze/test/sample.csv"``.
+        Example: ``bronze_key("pnemas.zip")`` → ``"bronze/pneuma/pnemas.zip"``.
         """
-        return self._build_key(self.bronze_prefix, *parts)
+        return self._build_key(self.bronze_layer_prefix, self.bronze_data_prefix, *parts)
 
     def silver_key(self, *parts: str) -> str:
-        """Construct an S3 object key under the Silver prefix.
+        """Construct an S3 object key under ``<silver_layer>/<silver_data>``.
 
-        Joins the configured ``silver_prefix`` with the supplied path parts,
-        normalising slashes so the result never contains empty or doubled
-        segments.
-
-        Example
-        -------
-        ``AwsConfig(..., silver_prefix="silver").silver_key("pneuma", "trajectories", "test")``
-        returns ``"silver/pneuma/trajectories/test"``.
+        Example: ``silver_key()`` → ``"silver/pneuma/trajectories"``.
         """
-        return self._build_key(self.silver_prefix, *parts)
+        return self._build_key(self.silver_layer_prefix, self.silver_data_prefix, *parts)
 
     def gold_key(self, *parts: str) -> str:
-        """Construct an S3 object key under the Gold prefix.
+        """Construct an S3 object key under ``<gold_layer>/<gold_data>``.
 
-        Joins the configured ``gold_prefix`` with the supplied path parts,
-        normalising slashes so the result never contains empty or doubled
-        segments.
-
-        Example
-        -------
-        ``AwsConfig(..., gold_prefix="gold").gold_key("pneuma", "trajectory_summary", "test")``
-        returns ``"gold/pneuma/trajectory_summary/test"``.
+        Example: ``gold_key()`` → ``"gold/pneuma/trajectory_summary"``.
         """
-        return self._build_key(self.gold_prefix, *parts)
+        return self._build_key(self.gold_layer_prefix, self.gold_data_prefix, *parts)
 
-    def _build_key(self, prefix: str, *parts: str) -> str:
-        """Construct an S3 key from a prefix and path parts.
+    # ── Canonical s3:// roots (single source of path composition) ─────────────
+    def s3_uri(self, key: str) -> str:
+        """Return the full ``s3://<bucket>/<key>`` URI for a normalised key."""
+        return f"s3://{self.bucket}/{key}"
 
-        Normalises slashes and rejects empty results.
+    def bronze_root(self, *parts: str) -> str:
+        """Full ``s3://`` root for Bronze data, e.g. ``s3://<bucket>/bronze/pneuma``."""
+        return self.s3_uri(self.bronze_key(*parts))
+
+    def silver_root(self, *parts: str) -> str:
+        """Full ``s3://`` root for Silver data,
+        e.g. ``s3://<bucket>/silver/pneuma/trajectories``."""
+        return self.s3_uri(self.silver_key(*parts))
+
+    def gold_root(self, *parts: str) -> str:
+        """Full ``s3://`` root for Gold data,
+        e.g. ``s3://<bucket>/gold/pneuma/trajectory_summary``."""
+        return self.s3_uri(self.gold_key(*parts))
+
+    def _build_key(self, *parts: str) -> str:
+        """Construct an S3 key from ordered path parts.
+
+        Splits every part on ``/`` to flatten pre-joined segments, drops empty
+        segments, and joins with a single ``/`` — so inputs like ``"bronze/"``,
+        ``"/pneuma/"``, ``""`` can never produce ``bronze//pneuma``. This is the
+        one canonical slash-normalising composer; DAGs, notebooks, and modules
+        must not rebuild path strings independently.
         """
         segments: list[str] = []
-        for raw in (prefix, *parts):
+        for raw in parts:
             if raw is None:
                 continue
-            # Split on '/' to flatten pre-joined parts and drop empties.
             for seg in str(raw).strip("/").split("/"):
                 if seg:
                     segments.append(seg)

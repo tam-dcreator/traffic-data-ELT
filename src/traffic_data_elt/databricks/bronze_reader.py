@@ -132,7 +132,7 @@ class BronzeArchive:
         S3 bucket the ZIP was sourced from.
     bronze_key:
         S3 object key of the Bronze ZIP
-        (e.g. ``bronze/pneuma/test/pnemas-sample.zip``).
+        (e.g. ``bronze/pneuma/pNEUMA_dataset.zip``).
     run_dir:
         Root run directory inside the UC volume (or legacy tmp dir).
         Removed entirely during :meth:`cleanup`.
@@ -366,7 +366,7 @@ def download_and_extract(
         S3 bucket name.
     bronze_key:
         Full S3 object key of the Bronze ZIP
-        (e.g. ``"bronze/pneuma/test/pnemas-sample.zip"``).
+        (e.g. ``"bronze/pneuma/pNEUMA_dataset.zip"``).
     volume_base_path:
         Override the UC volume root path.  When ``None``, resolved from
         ``UC_CATALOG`` / ``UC_SCHEMA`` / ``UC_VOLUME`` environment variables
