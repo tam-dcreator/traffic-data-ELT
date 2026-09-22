@@ -265,16 +265,86 @@ class WheelDeployResult:
     reused: bool             # True when the exact wheel already existed
 
 
+def _is_writable_dir(path: Path) -> bool:
+    """True if *path* is a directory the current process can write into.
+
+    Used to decide whether the wheel can be built in place or the source must
+    be staged to a writable location first (read-only repo bind mount).
+    """
+    return os.access(str(path), os.W_OK | os.X_OK)
+
+
+def _stage_build_source(repo_root: Path, dest: Path) -> None:
+    """Copy the minimal wheel-build inputs from *repo_root* into *dest*.
+
+    Copies ``pyproject.toml``, ``src/``, and any top-level ``README*``/
+    ``LICENSE*`` (referenced by packaging metadata). Excludes build/VCS/cache
+    artifacts so a stale in-tree ``*.egg-info`` from the read-only source is not
+    carried over. *dest* is recreated fresh on each call.
+    """
+    import shutil  # noqa: PLC0415 - stdlib, only needed here
+
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+
+    pyproject = repo_root / "pyproject.toml"
+    if not pyproject.is_file():
+        raise RuntimeError(f"cannot stage build source: {pyproject} not found")
+    shutil.copy2(pyproject, dest / "pyproject.toml")
+
+    src = repo_root / "src"
+    if not src.is_dir():
+        raise RuntimeError(f"cannot stage build source: {src} not found")
+    shutil.copytree(
+        src, dest / "src",
+        ignore=shutil.ignore_patterns(
+            "*.egg-info", "__pycache__", "*.pyc", ".mypy_cache", ".pytest_cache"
+        ),
+    )
+
+    # Optional metadata files that packaging config may reference.
+    for pattern in ("README*", "LICENSE*"):
+        for f in repo_root.glob(pattern):
+            if f.is_file():
+                shutil.copy2(f, dest / f.name)
+
+
 def build_wheel(
-    repo_root: str | Path, *, runner: CommandRunner = default_command_runner
+    repo_root: str | Path,
+    *,
+    output_dir: str | Path | None = None,
+    runner: CommandRunner = default_command_runner,
 ) -> Path:
-    """Build the project wheel into ``dist/`` and return the newest wheel path.
+    """Build the project wheel and return the newest wheel path.
+
+    The source project is *repo_root* (passed explicitly to ``pip wheel`` rather
+    than relying on the process working directory). The wheel is written to
+    *output_dir* when given, otherwise to ``repo_root / "dist"``.
+
+    Passing an explicit *output_dir* lets callers build from a READ-ONLY
+    *repo_root* (e.g. a read-only repository bind mount in a container) while
+    writing the artifact to a writable location.
 
     Raises ``RuntimeError`` on build failure or if no wheel is produced.
     """
     repo_root = Path(repo_root)
-    dist = repo_root / "dist"
-    res = runner(["python", "-m", "pip", "wheel", ".", "-w", str(dist), "--no-deps"])
+    dist = Path(output_dir) if output_dir is not None else repo_root / "dist"
+    dist.mkdir(parents=True, exist_ok=True)
+
+    # setuptools writes an in-tree ``src/*.egg-info`` during the build, which
+    # fails when *repo_root* is a READ-ONLY mount (as in the Airflow container).
+    # When the source tree is not writable, stage the minimal build inputs
+    # (pyproject.toml + src/ + any README/LICENSE) into a writable directory and
+    # build from there. A writable *repo_root* builds in place, unchanged.
+    build_src = repo_root
+    if not _is_writable_dir(repo_root):
+        build_src = dist / "_src"
+        _stage_build_source(repo_root, build_src)
+
+    res = runner(
+        ["python", "-m", "pip", "wheel", str(build_src), "-w", str(dist), "--no-deps"]
+    )
     if not res.ok:
         raise RuntimeError(
             f"wheel build failed: {res.stderr.strip() or res.stdout.strip()}"
@@ -318,6 +388,7 @@ def ensure_versioned_wheel(
     repo_root: str | Path,
     version: str,
     git_sha: str | None = None,
+    build_output_dir: str | Path | None = None,
     runner: CommandRunner = default_command_runner,
 ) -> WheelDeployResult:
     """Ensure the exact version+SHA wheel exists in *artifact_dir*.
@@ -325,6 +396,11 @@ def ensure_versioned_wheel(
     Reuse-if-exists: if the SHA-stamped wheel is already present, do nothing
     (no rebuild, no overwrite).  Otherwise build the wheel, validate its
     contents, upload it under the SHA-stamped name, and verify the upload.
+
+    When the build is required and *repo_root* is not writable (e.g. a
+    read-only repository bind mount), pass *build_output_dir* pointing at a
+    writable location so the wheel can be produced without writing into
+    *repo_root*.
 
     Returns a :class:`WheelDeployResult` (its ``wheel_path`` is the value to
     pass to jobs as ``WHEEL_PATH``).
@@ -339,7 +415,7 @@ def ensure_versioned_wheel(
         return WheelDeployResult(wheel_name, wheel_path, version, sha, reused=True)
 
     # Build (produces the un-suffixed name) then upload under the SHA name.
-    built = build_wheel(repo_root, runner=runner)
+    built = build_wheel(repo_root, output_dir=build_output_dir, runner=runner)
     problems = validate_wheel_contents(built)
     if problems:
         raise RuntimeError(f"wheel content validation failed: {problems}")

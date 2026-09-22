@@ -245,6 +245,90 @@ class AwsConfig:
 
 
 @dataclass(frozen=True)
+class BronzeTransferConfig:
+    """Tuning for the resumable ranged-multipart Bronze ingestion.
+
+    These control the HTTP Range GET → S3 UploadPart transfer that streams the
+    large source archive into S3 Bronze part-by-part, so a mid-stream network
+    failure only costs one part rather than the whole multi-hour transfer.
+
+    None of these are secrets.
+
+    Timeout semantics
+    -----------------
+    ``connect_timeout_s`` bounds establishing the TCP/TLS connection.
+    ``read_timeout_s`` is the **inactivity** timeout: the maximum time to wait
+    for the next chunk of body bytes, NOT a deadline for the whole part. A part
+    can take much longer than ``read_timeout_s`` to download as long as bytes
+    keep arriving. The old code used a single 30 s ``timeout`` for the whole
+    multi-GB stream; here the read timeout applies per-chunk of a bounded part.
+    """
+
+    # S3 multipart / HTTP range part size, in MiB. 512 MiB → 30 parts for the
+    # ~15.76 GB pNEUMA archive (final part short). S3 requires 5 MiB ≤ part
+    # ≤ 5 GiB (except the last part) and ≤ 10,000 parts.
+    part_size_mib: int = 512
+    # Per-part independent retry budget (a single part is retried this many
+    # times before the transfer fails; other completed parts are preserved).
+    part_retries: int = 5
+    # HTTP connect timeout (seconds) for each ranged GET.
+    connect_timeout_s: float = 30.0
+    # HTTP read/inactivity timeout (seconds): max wait for the next body chunk.
+    read_timeout_s: float = 120.0
+    # HTTP/S3 part concurrency. Kept at 1 for reliability + Zenodo rate limits.
+    concurrency: int = 1
+    # Byte size of the bounded chunks streamed from the HTTP body into the
+    # per-part spooled buffer (never a full 512 MiB Python bytes object).
+    http_chunk_bytes: int = 8 * 1024 * 1024  # 8 MiB
+
+    @property
+    def part_size_bytes(self) -> int:
+        """Part size in bytes (``part_size_mib`` × 1 MiB)."""
+        return self.part_size_mib * 1024 * 1024
+
+    @classmethod
+    def from_env(cls, dotenv_path: str = "v2_cloud/.env") -> BronzeTransferConfig:
+        """Build from environment (loads ``v2_cloud/.env`` when present).
+
+        Environment (all optional; defaults shown):
+            BRONZE_MULTIPART_PART_SIZE_MIB        (default: 512)
+            BRONZE_HTTP_PART_RETRIES              (default: 5)
+            BRONZE_HTTP_CONNECT_TIMEOUT_SECONDS   (default: 30)
+            BRONZE_HTTP_READ_TIMEOUT_SECONDS      (default: 120)
+            BRONZE_HTTP_CONCURRENCY               (default: 1)
+            BRONZE_HTTP_CHUNK_BYTES               (default: 8388608 = 8 MiB)
+        """
+        try:
+            from dotenv import load_dotenv
+
+            if dotenv_path is not None:
+                load_dotenv(dotenv_path, override=False)
+        except ImportError:
+            pass  # rely on ambient environment
+
+        part_size_mib = int(_optional("BRONZE_MULTIPART_PART_SIZE_MIB", "512"))
+        if part_size_mib < 5:
+            raise ValueError(
+                "BRONZE_MULTIPART_PART_SIZE_MIB must be >= 5 (S3 minimum part size)"
+            )
+        concurrency = int(_optional("BRONZE_HTTP_CONCURRENCY", "1"))
+        return cls(
+            part_size_mib=part_size_mib,
+            part_retries=int(_optional("BRONZE_HTTP_PART_RETRIES", "5")),
+            connect_timeout_s=float(
+                _optional("BRONZE_HTTP_CONNECT_TIMEOUT_SECONDS", "30")
+            ),
+            read_timeout_s=float(
+                _optional("BRONZE_HTTP_READ_TIMEOUT_SECONDS", "120")
+            ),
+            concurrency=max(1, concurrency),
+            http_chunk_bytes=int(
+                _optional("BRONZE_HTTP_CHUNK_BYTES", str(8 * 1024 * 1024))
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class NeonConfig:
     """Connection details for the Neon serving PostgreSQL database (V2).
 
