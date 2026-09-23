@@ -2,6 +2,7 @@
 
 from traffic_data_elt.config.settings import (
     AwsConfig,
+    BronzeTransferConfig,
     IngestionConfig,
     NeonConfig,
     Settings,
@@ -10,6 +11,7 @@ from traffic_data_elt.config.settings import (
 
 __all__ = [
     "AwsConfig",
+    "BronzeTransferConfig",
     "IngestionConfig",
     "NeonConfig",
     "Settings",
