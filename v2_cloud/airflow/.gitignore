@@ -1,0 +1,4 @@
+# Runtime credential staging for the V2 Airflow containers.
+# Populated by stage_credentials.sh from the host's ~/.databrickscfg and ~/.aws.
+# NEVER commit staged credentials.
+.runtime-credentials/

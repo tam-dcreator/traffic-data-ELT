@@ -1,0 +1,197 @@
+# V2 Airflow overlay — makes the shared V1 Airflow stack able to run the V2
+# production DAG WITHOUT creating a second, unrelated Airflow platform.
+#
+# HOW IT WORKS
+# ------------
+# This is a Docker Compose OVERRIDE applied on top of v1_local/compose.yaml:
+#
+#   cd v1_local
+#   docker compose \
+#     -f compose.yaml \
+#     -f ../v2_cloud/airflow/compose.v2.yaml \
+#     up -d
+#
+# (or set COMPOSE_FILE to both paths). It re-declares the shared
+# `x-airflow-common` anchor so every Airflow service — api-server, scheduler,
+# dag-processor, and airflow-init — gains the V2 tooling, mounts, and env. The
+# V1 PostgreSQL / Redash / Redis services are inherited unchanged from the base
+# file and are NOT redefined here.
+#
+# WHAT THE OVERLAY CHANGES vs V1
+# ------------------------------
+#   image/build : traffic-airflow-v2:3.0.3, built FROM the V1 image with the
+#                 Databricks CLI, Neon CLI, and python-dotenv layered on
+#                 (v2_cloud/airflow/Dockerfile). The V1 image is unchanged.
+#   env_file    : adds ../v2_cloud/.env (AWS/S3, Neon, Zenodo, UC config) on top
+#                 of the V1 .env. Secrets stay in the git-ignored .env only.
+#   volumes     : Compose REPLACES (does not merge) the volumes list for a
+#                 service, so the full V1 list is repeated here and the V2
+#                 mounts are appended:
+#                   - the V2 DAG directory (so both V1 and V2 DAGs are visible)
+#                   - the repository root READ-ONLY at /opt/airflow/repo
+#                     (pyproject.toml + src + scripts + v2_cloud/databricks
+#                     notebooks) so ensure_versioned_wheel can build the wheel
+#                     when the exact versioned artifact is missing
+#                   - staged Databricks + AWS credentials READ-ONLY into the
+#                     airflow home (see stage_credentials.sh)
+#   environment : REPO_ROOT=/opt/airflow/repo, DBT_PROFILES_DIR/DBT_PROJECT_DIR,
+#                 HOME=/home/airflow (so the Databricks/AWS CLIs and boto3 find
+#                 the mounted credentials), and the V2 notebook/UC defaults.
+#
+# CREDENTIALS
+# -----------
+# No secret is baked into any image. Databricks + AWS credentials are supplied
+# as mounts of a git-ignored staging directory; the V2 .env (also git-ignored)
+# supplies non-secret config plus the Neon API key / DB password.
+# Run v2_cloud/airflow/stage_credentials.sh once before `up`.
+#
+# CREDENTIAL SCOPE: under LocalExecutor the task processes run inside the
+# SCHEDULER only, so the Databricks/AWS credential mounts live on
+# airflow-scheduler ALONE (see that service below) — NOT in the shared anchor.
+# api-server / dag-processor / init do not execute tasks and parse DAGs from
+# non-secret env only, so they carry no credential material.
+
+x-airflow-common: &airflow-common
+  env_file:
+    - .env                      # V1 runtime values (relative to v1_local/)
+    - ../v2_cloud/.env          # V2 AWS/Neon/Zenodo/UC config (git-ignored)
+  build:
+    context: ..
+    dockerfile: v2_cloud/airflow/Dockerfile
+    args:
+      BASE_IMAGE: "traffic-airflow:3.0.3"
+      DATABRICKS_CLI_VERSION: "1.14.1"
+      DATABRICKS_CLI_SHA256: "06ecb5a3299a3ef85d0ec7095fa193dd28bc12834f59e9ba399846b3af2fbfe8"
+      NEON_VERSION: "4.14.0"
+      NEON_SHA256: "3ed6a3690e82fbb8e77d214b269fcd181a2e4f336cd12dae6a748473a5b5b61a"
+  image: traffic-airflow-v2:3.0.3
+  user: "${AIRFLOW_UID:-50000}:0"
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow-api-server:8080/execution/"
+    AIRFLOW__CORE__FERNET_KEY: "${AIRFLOW_FERNET_KEY}"
+    AIRFLOW__API_AUTH__JWT_SECRET: "${AIRFLOW_JWT_SECRET}"
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: "/opt/airflow/auth/passwords.json"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@postgres:5432/${AIRFLOW_DB_NAME}"
+    AIRFLOW__CORE__DAGBAG_IMPORT_TIMEOUT: "60"
+    AIRFLOW__LOGGING__LOGGING_LEVEL: "INFO"
+    AIRFLOW__LOGGING__LOG_RETENTION_DAYS: "30"
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "${AIRFLOW_ADMIN_USERNAME}:admin"
+    # Shared package import path (V1 mount preserved below).
+    PYTHONPATH: "/opt/traffic_data_elt_src"
+    # dbt profiles live in the mounted dbt project.
+    DBT_PROFILES_DIR: "/opt/airflow/dbt/traffic_dwh"
+    # ── V2 additions ──────────────────────────────────────────────────────────
+    # Repo root the wheel build / bootstrap / preflight scripts operate on.
+    REPO_ROOT: "/opt/airflow/repo"
+    DBT_PROJECT_DIR: "/opt/airflow/dbt/traffic_dwh"
+    # The DAG passes this to validate_neon_target.py (relative to REPO_ROOT cwd).
+    V2_ENV_FILE: "/opt/airflow/repo/v2_cloud/.env"
+    # Notebook source dir for ensure_databricks_notebooks (repo-mounted).
+    NOTEBOOKS_DIR: "/opt/airflow/repo/v2_cloud/databricks/notebooks"
+    NOTEBOOK_WORKSPACE_DIR: "/traffic_data"
+    # HOME so the Databricks CLI (~/.databrickscfg) and boto3/AWS CLI (~/.aws)
+    # discover the read-only credential mounts below.
+    HOME: "/home/airflow"
+    # Databricks CLI profile the DAG uses (implicit DEFAULT).
+    DATABRICKS_PROFILE: "${DATABRICKS_PROFILE:-DEFAULT}"
+    # Allow git to operate on the repo mount (owned by the host uid, not 50000)
+    # so ensure_versioned_wheel can SHA-stamp the wheel. Injected via env rather
+    # than writing a git config file into the read-only mount.
+    GIT_CONFIG_COUNT: "1"
+    GIT_CONFIG_KEY_0: "safe.directory"
+    GIT_CONFIG_VALUE_0: "/opt/airflow/repo"
+  volumes:
+    # ── V1 mounts (repeated: Compose replaces the list, it does not merge) ─────
+    # The dags folder is backed by a small WRITABLE named volume so the two
+    # read-only DAG bind mounts below can be created as subdirectories inside
+    # it. (Bind-mounting the read-only image layer directly forbids creating
+    # nested mountpoints; a writable volume parent allows it.) Airflow scans
+    # dags_folder RECURSIVELY, so both subdirs are discovered.
+    - airflow_dags_root:/opt/airflow/dags
+    - ../v1_local/airflow/dags:/opt/airflow/dags/v1:ro
+    - ../src/traffic_data_elt:/opt/traffic_data_elt_src/traffic_data_elt:ro
+    - ./airflow/config/airflow.cfg:/opt/airflow/airflow.cfg:ro
+    - ./airflow/scripts/init.sh:/opt/airflow/scripts/init.sh:ro
+    - ../data/sample:/data/sample:ro
+    - ../dbt/traffic_dwh:/opt/airflow/dbt/traffic_dwh:ro
+    - airflow_logs:/opt/airflow/logs
+    - airflow_auth:/opt/airflow/auth
+    # ── V2 mounts ──────────────────────────────────────────────────────────────
+    # V2 production DAG directory as a sibling subdir; the recursive dags scan
+    # discovers both /opt/airflow/dags/v1 and /opt/airflow/dags/v2 DAGs.
+    - ../v2_cloud/airflow/dags:/opt/airflow/dags/v2:ro
+    # Whole repo READ-ONLY for the wheel build + scripts + notebooks + pyproject.
+    - ..:/opt/airflow/repo:ro
+    # NOTE: cloud CREDENTIAL mounts are intentionally NOT in this shared anchor.
+    # Under LocalExecutor the task processes run inside the SCHEDULER only, so
+    # only airflow-scheduler needs AWS/Databricks/Neon credentials. They are
+    # mounted on that service alone (see airflow-scheduler below). The
+    # api-server, dag-processor, and init do not execute tasks and parse DAGs
+    # using non-secret env only, so they get no credential material.
+  networks:
+    - traffic_v1
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  # Re-declare each Airflow service so it picks up the merged x-airflow-common.
+  # Service-specific settings (commands, ports, health checks, extra deps) come
+  # from the base compose.yaml and are preserved by the merge; only the shared
+  # anchor contents above are overridden.
+
+  airflow-init:
+    <<: *airflow-common
+    user: "0:0"
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_ADMIN_PASSWORD: "${AIRFLOW_ADMIN_PASSWORD}"
+    command: bash /opt/airflow/scripts/init.sh
+    restart: "no"
+
+  airflow-api-server:
+    <<: *airflow-common
+    command: airflow api-server
+    ports:
+      - "8080:8080"
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: airflow scheduler
+    # LocalExecutor runs task processes INSIDE this service, so the cloud
+    # credentials are mounted HERE ONLY (not in the shared anchor). Compose
+    # replaces the volumes list, so the base list is aliased in via a YAML
+    # anchor and the credential mounts are appended after it.
+    volumes:
+      # Base mounts (same set the other Airflow services get).
+      - airflow_dags_root:/opt/airflow/dags
+      - ../v1_local/airflow/dags:/opt/airflow/dags/v1:ro
+      - ../src/traffic_data_elt:/opt/traffic_data_elt_src/traffic_data_elt:ro
+      - ./airflow/config/airflow.cfg:/opt/airflow/airflow.cfg:ro
+      - ./airflow/scripts/init.sh:/opt/airflow/scripts/init.sh:ro
+      - ../data/sample:/data/sample:ro
+      - ../dbt/traffic_dwh:/opt/airflow/dbt/traffic_dwh:ro
+      - airflow_logs:/opt/airflow/logs
+      - airflow_auth:/opt/airflow/auth
+      - ../v2_cloud/airflow/dags:/opt/airflow/dags/v2:ro
+      - ..:/opt/airflow/repo:ro
+      # ── Cloud credentials — SCHEDULER ONLY (LocalExecutor runs tasks here) ──
+      # Staged read-only (populated by stage_credentials.sh):
+      #   .databrickscfg = CLI profile (host); .aws = boto3 config + credentials.
+      - ../v2_cloud/airflow/.runtime-credentials/.databrickscfg:/home/airflow/.databrickscfg:ro
+      # .databricks is READ-WRITE: the CLI must persist refreshed OAuth tokens.
+      - ../v2_cloud/airflow/.runtime-credentials/.databricks:/home/airflow/.databricks:rw
+      - ../v2_cloud/airflow/.runtime-credentials/.aws:/home/airflow/.aws:ro
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: airflow dag-processor
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+# Writable parent for the dags folder so the read-only V1/V2 DAG bind mounts can
+# be created as subdirectories inside it. Ephemeral by design (holds no state);
+# the actual DAG files come from the read-only mounts.
+volumes:
+  airflow_dags_root:
