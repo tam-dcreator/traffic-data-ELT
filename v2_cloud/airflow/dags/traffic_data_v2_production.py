@@ -33,10 +33,24 @@ from airflow.decorators import dag, task, task_group
 from airflow.exceptions import AirflowException
 from airflow.utils.trigger_rule import TriggerRule
 
-# ── Make the shared package importable (mounted at /opt/airflow/src) ──────────
-_SRC_CANDIDATES = ("/opt/airflow/src", str(Path(__file__).resolve().parents[3] / "src"))
-for _p in _SRC_CANDIDATES:
-    if _p not in sys.path and os.path.isdir(_p):
+# ── Make the shared package importable, preferring the LIVE mounted source ────
+# The image also carries a pip-installed copy and a baked /opt/airflow/src copy;
+# both can be stale relative to the read-only repo bind mount. Put the live
+# mounts FIRST on sys.path so DAG tasks always import the current package code
+# (e.g. newly added symbols like BronzeTransferConfig) rather than a stale copy.
+# Order: env REPO_ROOT/src → packaged mount → repo-relative src → legacy fallback.
+_repo_root_env = os.environ.get("REPO_ROOT", "/opt/airflow/repo")
+_SRC_CANDIDATES = (
+    os.path.join(_repo_root_env, "src"),          # /opt/airflow/repo/src (live)
+    "/opt/traffic_data_elt_src",                  # packaged mount (live)
+    str(Path(__file__).resolve().parents[3] / "src"),
+    "/opt/airflow/src",                           # legacy baked copy (last resort)
+)
+# Insert in REVERSE so the first candidate ends up highest-priority on sys.path.
+for _p in reversed(_SRC_CANDIDATES):
+    if os.path.isdir(_p):
+        if _p in sys.path:
+            sys.path.remove(_p)
         sys.path.insert(0, _p)
 
 from traffic_data_elt.airflow_callbacks import on_pipeline_success, on_task_failure  # noqa: E402
@@ -60,10 +74,17 @@ ARTIFACT_VOLUME = os.environ.get("ARTIFACT_VOLUME", "v2_artifacts")
 ARTIFACT_PATH = os.environ.get(
     "ARTIFACT_PATH", f"/Volumes/{UC_CATALOG}/{UC_SCHEMA}/{ARTIFACT_VOLUME}/wheels"
 )
+# Writable location for building the wheel when the versioned artifact is
+# missing (REPO_ROOT is mounted read-only in the Airflow container).
+WHEEL_BUILD_DIR = os.environ.get("WHEEL_BUILD_DIR", "/tmp/traffic_data_wheel_build")
 
 NEON_SECRET_SCOPE = os.environ.get("NEON_SECRET_SCOPE", "v2-neon")
 NEON_SECRET_KEY = os.environ.get("NEON_SECRET_KEY", "db-password")
 NEON_COPY_BATCH_SIZE = os.environ.get("NEON_COPY_BATCH_SIZE", "10000")
+# NOTE: NEON_LOAD_MODE is read at TASK RUNTIME (see load_neon_production /
+# _neon_load_mode) — not as a module-level constant — so edits to v2_cloud/.env
+# take effect on the next DAG run without a container restart, matching how the
+# Bronze config is loaded.
 
 # Notebook workspace directory + local source dir (deployed by a bootstrap task).
 NOTEBOOK_WORKSPACE_DIR = os.environ.get("NOTEBOOK_WORKSPACE_DIR", "/traffic_data")
@@ -120,7 +141,14 @@ def traffic_data_v2_production() -> None:
     # ── Preflight ─────────────────────────────────────────────────────────────
     @task(task_id="preflight_config")
     def preflight_config() -> dict:
-        """Validate required non-secret config; resolve + report paths."""
+        """Validate the runtime layout + required non-secret config; report paths.
+
+        Fails fast (before any Databricks/S3/Neon work) when the environment the
+        DAG assumes is not actually present, so a misconfigured deployment is
+        caught here with an actionable message rather than deep inside the wheel
+        or notebook tasks.
+        """
+        _validate_runtime_layout()
         aws = AwsConfig.from_env()
         if not aws.zenodo_url:
             raise AirflowException("ZENODO_URL is required for production ingestion.")
@@ -184,6 +212,9 @@ def traffic_data_v2_production() -> None:
             result = bootstrap.ensure_versioned_wheel(
                 DATABRICKS_PROFILE, ARTIFACT_PATH,
                 repo_root=REPO_ROOT, version=_project_version(),
+                # REPO_ROOT is mounted read-only in the Airflow container; build
+                # into a writable dir so the wheel can be produced when missing.
+                build_output_dir=WHEEL_BUILD_DIR,
             )
             return {**cfg, "wheel_path": result.wheel_path,
                     "wheel_name": result.wheel_name, "wheel_reused": result.reused,
@@ -212,29 +243,69 @@ def traffic_data_v2_production() -> None:
         )
 
     # ── Bronze ────────────────────────────────────────────────────────────────
-    @task(task_id="ingest_full_bronze")
+    # Retry strategy for Bronze ingestion (see also default_args.retries=2):
+    #   * per-PART HTTP retries (5) live inside BronzeRangedUploader and handle
+    #     transient mid-stream failures without re-downloading other parts;
+    #   * this small task-level retry count handles worker/process death — each
+    #     task retry RESUMES the existing multipart upload from the next missing
+    #     part (never from byte zero), so 2 is sufficient and avoids a layered
+    #     retry explosion (5 part-retries × N task-retries).
+    @task(task_id="ingest_full_bronze", retries=2,
+          retry_delay=datetime.timedelta(minutes=1))
     def ingest_full_bronze(cfg: dict) -> dict:
-        """Stream the archive from ZENODO_URL → S3 Bronze (multipart, idempotent)."""
-        from traffic_data_elt.extract import ZenodoStreamExtractor
-        from traffic_data_elt.load import S3Uploader
+        """Stream ZENODO_URL → S3 Bronze via resumable ranged multipart ingestion.
+
+        Delegates entirely to the packaged, tested
+        :class:`traffic_data_elt.load.BronzeRangedUploader`. Behaviour on an
+        Airflow task retry (no restart from byte zero):
+
+            completed Bronze object exists & size matches?  → reuse
+            valid resumable multipart checkpoint exists?     → resume next part
+            otherwise                                        → new upload @ part 1
+
+        A mid-stream network failure only costs the current part; earlier parts
+        are preserved in S3 and recorded in the checkpoint. Returns only small
+        metadata (no payloads, no checkpoint) for XCom.
+        """
+        import boto3  # noqa: PLC0415
+        from botocore.config import Config as BotoConfig  # noqa: PLC0415
+
+        from traffic_data_elt.config import BronzeTransferConfig  # noqa: PLC0415
+        from traffic_data_elt.load import (  # noqa: PLC0415
+            BronzeFatalError,
+            BronzeRangedUploader,
+        )
 
         aws = AwsConfig.from_env()
-        extractor = ZenodoStreamExtractor(aws.zenodo_url, chunk_bytes=aws.http_chunk_bytes)
-        expected_len = extractor.content_length
-        state = pp.inspect_bronze_object(
-            cfg["bucket"], cfg["bronze_key"], region=aws.region,
-            expected_length=expected_len,
+        bronze_cfg = BronzeTransferConfig.from_env()
+        # Give botocore retry headroom that complements (not replaces) our
+        # per-part logic; keep it modest since the app handles resume.
+        boto_client = boto3.client(
+            "s3", region_name=aws.region,
+            config=BotoConfig(retries={"max_attempts": 3, "mode": "standard"}),
         )
-        if state.reuse:
-            log.info("Bronze reuse: %s (%s bytes) — %s",
-                     cfg["bronze_key"], state.size_bytes, state.reason)
-            return {**cfg, "bronze_bytes": state.size_bytes, "bronze_decision": "reused"}
+        uploader = BronzeRangedUploader(
+            boto_client, cfg["bucket"], config=bronze_cfg,
+        )
+        try:
+            result = uploader.ingest(aws.zenodo_url, cfg["bronze_key"])
+        except BronzeFatalError as exc:
+            # Non-recoverable (e.g. source size changed, range not honoured).
+            raise AirflowException(f"Bronze ingestion failed (non-recoverable): {exc}") from exc
 
-        uploader = S3Uploader(aws)
-        with extractor.open() as body:
-            result = uploader.upload_stream(body, cfg["bronze_object_name"])
-        log.info("Bronze upload complete: %s (%s bytes)", result.key, result.bytes_transferred)
-        return {**cfg, "bronze_bytes": result.bytes_transferred, "bronze_decision": "uploaded"}
+        log.info(
+            "Bronze ingest done key=%s disposition=%s object_size=%d parts=%d duration=%.1fs",
+            result.key, result.disposition, result.object_size,
+            result.parts_count, result.duration_s,
+        )
+        return {
+            **cfg,
+            "bronze_bytes": result.object_size,
+            "source_size": result.source_size,
+            "bronze_decision": result.disposition,
+            "bronze_parts": result.parts_count,
+            "bronze_duration_s": round(result.duration_s, 1),
+        }
 
     @task(task_id="validate_bronze")
     def validate_bronze(cfg: dict) -> dict:
@@ -304,7 +375,7 @@ def traffic_data_v2_production() -> None:
             neon_user=neon.user, neon_sslmode=neon.sslmode,
             neon_secret_scope=NEON_SECRET_SCOPE, neon_secret_key=NEON_SECRET_KEY,
             neon_branch=os.environ.get("NEON_BRANCH", ""),
-            load_mode="replace_sources", copy_batch_size=NEON_COPY_BATCH_SIZE,
+            load_mode=_neon_load_mode(), copy_batch_size=NEON_COPY_BATCH_SIZE,
             allow_production_write=allow,
         )
         run_id = pp.submit_notebook_job(
@@ -423,10 +494,98 @@ def _project_version() -> str:
         return os.environ.get("PROJECT_VERSION", "0.1.0")
 
 
+def _validate_runtime_layout() -> None:
+    """Fail fast if the runtime layout the DAG depends on is not present.
+
+    The DAG defaults assume the local-Docker deployment layout wired by
+    ``v2_cloud/airflow/compose.v2.yaml`` (repo mounted at ``REPO_ROOT``, the dbt
+    project and notebook sources reachable underneath). Any other orchestrator
+    MUST override the corresponding env vars (``REPO_ROOT``, ``DBT_PROJECT_DIR``,
+    ``NOTEBOOKS_DIR``) to point at wherever it stages these inputs — see
+    ``v2_cloud/airflow/README.md`` for the per-platform mapping.
+
+    Each check raises :class:`AirflowException` with the offending path, the env
+    var that controls it, and how to fix it. No secrets are read or logged.
+    """
+    problems: list[str] = []
+
+    # 1. REPO_ROOT must exist and contain pyproject.toml (needed to build/version
+    #    the wheel when the exact versioned artifact is missing).
+    if not os.path.isdir(REPO_ROOT):
+        problems.append(
+            f"REPO_ROOT={REPO_ROOT!r} is not a directory. Set REPO_ROOT to the "
+            f"repository root available to this Airflow runtime (compose.v2.yaml "
+            f"mounts it read-only at /opt/airflow/repo)."
+        )
+    elif not os.path.isfile(os.path.join(REPO_ROOT, "pyproject.toml")):
+        problems.append(
+            f"pyproject.toml not found under REPO_ROOT={REPO_ROOT!r}. The wheel "
+            f"build (ensure_versioned_wheel) needs the project source here. "
+            f"Point REPO_ROOT at the repository root."
+        )
+
+    # 2. DBT_PROJECT_DIR must exist (run_dbt_v2_production runs dbt here).
+    if not os.path.isdir(DBT_PROJECT_DIR):
+        problems.append(
+            f"DBT_PROJECT_DIR={DBT_PROJECT_DIR!r} is not a directory. Point it at "
+            f"the shared dbt project (dbt/traffic_dwh)."
+        )
+    elif not os.path.isfile(os.path.join(DBT_PROJECT_DIR, "dbt_project.yml")):
+        problems.append(
+            f"dbt_project.yml not found under DBT_PROJECT_DIR={DBT_PROJECT_DIR!r}."
+        )
+
+    # 3. NOTEBOOKS_DIR must exist and contain every notebook the pipeline deploys
+    #    (ensure_databricks_notebooks reads them from here).
+    if not os.path.isdir(NOTEBOOKS_DIR):
+        problems.append(
+            f"NOTEBOOKS_DIR={NOTEBOOKS_DIR!r} is not a directory. Point it at the "
+            f"V2 notebook sources (v2_cloud/databricks/notebooks)."
+        )
+    else:
+        missing = [
+            f"{n}.py" for n in bootstrap.DEFAULT_NOTEBOOKS
+            if not os.path.isfile(os.path.join(NOTEBOOKS_DIR, f"{n}.py"))
+        ]
+        if missing:
+            problems.append(
+                f"notebook source(s) missing under NOTEBOOKS_DIR={NOTEBOOKS_DIR!r}: "
+                f"{missing}"
+            )
+
+    if problems:
+        raise AirflowException(
+            "preflight_config runtime-layout validation failed:\n  - "
+            + "\n  - ".join(problems)
+        )
+    log.info(
+        "runtime layout OK (REPO_ROOT=%s, DBT_PROJECT_DIR=%s, NOTEBOOKS_DIR=%s)",
+        REPO_ROOT, DBT_PROJECT_DIR, NOTEBOOKS_DIR,
+    )
+
+
 def _dbt_target() -> str:
     """Derive the dbt target from NEON_BRANCH (v2_<branch>)."""
     branch = os.environ.get("NEON_BRANCH", "production")
     return f"v2_{branch}"
+
+
+def _neon_load_mode() -> str:
+    """Return the Neon serving publish mode from ``NEON_LOAD_MODE`` at runtime.
+
+    Read at task runtime (not module import) so edits to ``v2_cloud/.env`` take
+    effect on the next DAG run without a container restart. Loads the V2 env
+    file first (python-dotenv, ``override=False`` so a shell/container-exported
+    value still wins), then reads the var. Defaults to the production-safe
+    ``replace_sources``. The serving pipeline validates the value against its
+    ``VALID_LOAD_MODES`` and fails fast on an unknown mode.
+    """
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(os.environ.get("V2_ENV_FILE", "v2_cloud/.env"), override=False)
+    except ImportError:
+        pass
+    return os.environ.get("NEON_LOAD_MODE", "replace_sources")
 
 
 def _read_parquet_metrics(aws, silver_path: str) -> dict:

@@ -18,3 +18,16 @@ repos:
 
         # Run only during the pre-commit stage.
         stages: [pre-commit]
+
+  # Ruff linter — enforces the rule set configured in pyproject.toml
+  # ([tool.ruff.lint]). Pinned for reproducibility; keep in sync with the
+  # ruff version pin in pyproject.toml's dev extras.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.6
+
+    hooks:
+      # Lint. Runs `ruff check`; only the safe/mechanical fixes are auto-applied
+      # so behaviour-sensitive findings still surface for manual review.
+      - id: ruff
+        args: [--fix]
+        stages: [pre-commit]

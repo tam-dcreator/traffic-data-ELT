@@ -129,7 +129,7 @@ Docker-in-Docker is intentional — it isolates runtime containers from the host
 ### Prerequisites
 
 - Docker Desktop (or equivalent) with WSL2 backend
-- VS Code / Kiro with Dev Containers extension
+- VS Code / Kiro IDE with Dev Containers extension
 
 ### Dev Container tools
 
